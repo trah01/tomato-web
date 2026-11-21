@@ -1,0 +1,44 @@
+# 用本文件夹里的代码构建并运行番茄阅读器
+#
+# 启动：docker compose up -d --build
+# 停止：docker compose down
+# 查看状态：docker compose ps
+# 日志：docker compose logs -f
+
+services:
+  # 阅读器本体：对外只开 8080 这一个端口
+  fanqieweb:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: fanqieweb:local
+    container_name: fanqieweb
+    restart: unless-stopped
+    networks:
+      - fanqie
+    ports:
+      - "8080:8080"
+    environment:
+      TZ: Asia/Shanghai
+      # 番茄账号登录凭据存在这里（数据卷内，不进镜像）
+      FQ_ACCOUNT_FILE: /app/session/account.json
+      # 站点设置：访问密码、两步验证、番茄账号绑定方式
+      FQ_SETTINGS_FILE: /app/session/settings.json
+    volumes:
+      # 字体映射表：挂载后可以直接改宿主机的 data/font_map.json
+      - ./data:/app/data:ro
+      # 登录凭据和设置放在名字叫 account-session 的数据卷里，重装镜像不会丢
+      - account-session:/app/session
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8080/api/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+networks:
+  fanqie:
+    driver: bridge
+
+volumes:
+  account-session:

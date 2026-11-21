@@ -1,0 +1,104 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex">
+<title>番茄阅读器-网页版 · 需要登录</title>
+<style>
+  :root{
+    --bg:#f6f3ec; --fg:#2b2622; --muted:#8a8078; --line:#e2dbd0;
+    --accent:#e8562a; --card:#fffdf8;
+  }
+  *{box-sizing:border-box}
+  body{
+    margin:0; min-height:100dvh; padding:24px;
+    display:flex; flex-direction:column; align-items:center; justify-content:center; gap:16px;
+    background:var(--bg); color:var(--fg);
+    font-family:"PingFang SC","Hiragino Sans GB","Microsoft YaHei",system-ui,sans-serif;
+  }
+  .card{
+    width:min(380px,100%); padding:26px 24px 22px;
+    background:var(--card); border:1px solid var(--line); border-radius:14px;
+    box-shadow:0 12px 40px rgba(0,0,0,.06);
+  }
+  h1{margin:0 0 4px; font-size:18px}
+  .sub{margin:0 0 20px; color:var(--muted); font-size:13px}
+  label{display:block; margin-bottom:6px; font-size:13px; color:var(--muted)}
+  input{
+    width:100%; margin-bottom:14px; padding:9px 12px;
+    border:1px solid var(--line); border-radius:8px;
+    background:var(--bg); color:var(--fg); font-size:14px; outline:none;
+  }
+  input:focus{border-color:var(--accent)}
+  button{
+    width:100%; padding:10px; border:none; border-radius:8px;
+    background:var(--accent); color:#fff; font-size:14px; cursor:pointer;
+  }
+  button:disabled{opacity:.6; cursor:default}
+  .status{min-height:20px; margin:12px 0 0; font-size:13px; color:#c0392b}
+  .foot{margin:0; color:var(--muted); font-size:12px; text-align:center}
+  .foot a{color:inherit; text-decoration:underline}
+  .foot a:hover{color:var(--accent)}
+  [hidden]{display:none !important}
+</style>
+</head>
+<body>
+<main class="card">
+  <h1>🍅 番茄阅读器-网页版</h1>
+  <p class="sub">本站已开启访问密码，请输入账号密码后继续。</p>
+  <form id="form">
+    <label for="username">账号</label>
+    <input id="username" name="username" autocomplete="username" required autofocus>
+    <label for="password">密码</label>
+    <input id="password" name="password" type="password" autocomplete="current-password" required>
+    <div id="code-field" hidden>
+      <label for="code">两步验证码</label>
+      <input id="code" name="code" inputmode="numeric" autocomplete="one-time-code" maxlength="6" placeholder="验证器 App 中的 6 位数字">
+    </div>
+    <button id="submit" type="submit">进入</button>
+  </form>
+  <p class="status" id="status" role="status"></p>
+</main>
+<footer class="foot">仅供个人学习使用　·　使用即代表遵守 <a href="/usage">《使用说明》</a></footer>
+<script>
+const $ = s => document.querySelector(s);
+const form = $("#form");
+const statusEl = $("#status");
+const submit = $("#submit");
+const codeField = $("#code-field");
+const codeInput = $("#code");
+
+form.addEventListener("submit", async event => {
+  event.preventDefault();
+  submit.disabled = true;
+  statusEl.textContent = "";
+  const body = {
+    username: $("#username").value.trim(),
+    password: $("#password").value,
+    code: codeInput.value.trim()
+  };
+  try {
+    const resp = await fetch("/api/auth/login", {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify(body)
+    });
+    const data = await resp.json().catch(() => ({}));
+    if (resp.ok) {
+      location.replace("/");
+      return;
+    }
+    if (data.need2fa) {
+      codeField.hidden = false;
+      codeInput.focus();
+    }
+    statusEl.textContent = data.error || "登录失败，请重试";
+  } catch {
+    statusEl.textContent = "网络异常，请稍后重试";
+  }
+  submit.disabled = false;
+});
+</script>
+</body>
+</html>

@@ -12,12 +12,41 @@ import (
 )
 
 // 番茄账号相关接口：扫码登录、书架同步、阅读进度读写。
+//
+// 账号存在哪里由设置里的「番茄账号绑定方式」决定：
+//   - browser：凭据在访问者浏览器的 localStorage，随请求头 X-FQ-Cookie 带来；
+//   - server：凭据在服务端数据卷里，任何访问者共用同一个账号。
+
+// accountUnavailable 未登录时的统一响应。
+func (s *server) accountUnavailable(w http.ResponseWriter) {
+	writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "请先登录番茄账号"})
+}
+
+// accountFor 取当前请求对应的番茄账号，browser 模式下浏览器没带 Cookie 时返回 nil。
+func (s *server) accountFor(ctx context.Context, r *http.Request) *fqapi.Account {
+	acct := s.fanqie.Account(ctx, r)
+	if acct == nil || !acct.LoggedIn() {
+		return nil
+	}
+	return acct
+}
 
 // handleAccount 返回账号状态。
 // GET /api/account
 func (s *server) handleAccount(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
-	writeJSON(w, http.StatusOK, s.account.Status())
+	ctx, cancel := context.WithTimeout(r.Context(), 20*time.Second)
+	defer cancel()
+
+	out := map[string]any{
+		"mode":     s.fanqie.Mode(),
+		"loggedIn": false,
+	}
+	if acct := s.accountFor(ctx, r); acct != nil {
+		out = acct.Status()
+		out["mode"] = s.fanqie.Mode()
+	}
+	writeJSON(w, http.StatusOK, out)
 }
 
 // handleQRLogin 获取登录二维码。
@@ -30,17 +59,22 @@ func (s *server) handleQRLogin(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 20*time.Second)
 	defer cancel()
 
-	qr, err := s.account.StartQRLogin(ctx)
+	acct := s.fanqie.NewLoginSession()
+	qr, err := acct.StartQRLogin(ctx)
 	if err != nil {
 		writeErr(w, http.StatusBadGateway, "获取二维码失败", err)
 		return
 	}
+	// browser 模式：扫码结果要回到同一个会话，按 token 暂存
+	s.fanqie.RememberQR(qr.Token, acct)
+
 	writeJSON(w, http.StatusOK, map[string]any{
 		"ok":       true,
 		"token":    qr.Token,
 		"image":    qr.Image,
 		"text":     qr.Text,
 		"expireAt": qr.Expire,
+		"mode":     s.fanqie.Mode(),
 	})
 }
 
@@ -55,7 +89,19 @@ func (s *server) handleQRPoll(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 25*time.Second)
 	defer cancel()
 
-	st, err := s.account.PollQRLogin(ctx, token)
+	acct := s.fanqie.QRSession(token)
+	if acct == nil {
+		acct = s.fanqie.Account(ctx, r)
+	}
+	if acct == nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{
+			"state":   "error",
+			"message": "登录会话已失效，请重新获取二维码",
+		})
+		return
+	}
+
+	st, err := acct.PollQRLogin(ctx, token)
 	if err != nil {
 		writeErr(w, http.StatusBadGateway, "查询扫码状态失败", err)
 		return
@@ -63,8 +109,9 @@ func (s *server) handleQRPoll(w http.ResponseWriter, r *http.Request) {
 
 	// 已确认：跟随跳转建立会话
 	if st.State == "confirmed" {
-		user, ferr := s.account.FinishQRLogin(ctx, st.Redirected)
+		user, ferr := acct.FinishQRLogin(ctx, st.Redirected)
 		if ferr != nil {
+			s.fanqie.ForgetQR(token)
 			writeJSON(w, http.StatusOK, map[string]any{
 				"state":   "error",
 				"message": "扫码已确认，但未能建立会话，请重试或改用粘贴 Cookie",
@@ -72,11 +119,15 @@ func (s *server) handleQRPoll(w http.ResponseWriter, r *http.Request) {
 			})
 			return
 		}
-		s.logger.Printf("番茄账号已登录: %s", user.Name)
+		s.fanqie.ForgetQR(token)
+		s.fanqie.Join(acct)
+		s.logger.Printf("番茄账号已登录: %s（%s）", user.Name, s.fanqie.Mode())
 		writeJSON(w, http.StatusOK, map[string]any{
 			"state":   "success",
 			"message": "登录成功：" + user.Name,
 			"user":    user,
+			"mode":    s.fanqie.Mode(),
+			"cookie":  s.fanqie.ResponseCookie(acct),
 		})
 		return
 	}
@@ -108,13 +159,20 @@ func (s *server) handleCookieLogin(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 25*time.Second)
 	defer cancel()
 
-	user, err := s.account.LoginWithCookie(ctx, req.Cookie)
+	acct := s.fanqie.NewLoginSession()
+	user, err := acct.LoginWithCookie(ctx, req.Cookie)
 	if err != nil {
 		writeErr(w, http.StatusBadRequest, "Cookie 登录失败", err)
 		return
 	}
-	s.logger.Printf("番茄账号已登录: %s", user.Name)
-	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "user": user})
+	s.fanqie.Join(acct)
+	s.logger.Printf("番茄账号已登录: %s（%s）", user.Name, s.fanqie.Mode())
+	writeJSON(w, http.StatusOK, map[string]any{
+		"ok":     true,
+		"user":   user,
+		"mode":   s.fanqie.Mode(),
+		"cookie": s.fanqie.ResponseCookie(acct),
+	})
 }
 
 // handleLogout 退出登录。
@@ -124,11 +182,17 @@ func (s *server) handleLogout(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "仅支持 POST"})
 		return
 	}
-	if err := s.account.Logout(); err != nil {
+	if s.fanqie.BrowserMode() {
+		// 凭据在浏览器里，服务端只需清掉内存会话
+		s.fanqie.Drop(r.Header.Get(fanqieCookieHeader))
+		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "mode": s.fanqie.Mode()})
+		return
+	}
+	if err := s.fanqie.Server().Logout(); err != nil {
 		writeErr(w, http.StatusInternalServerError, "退出登录失败", err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "mode": s.fanqie.Mode()})
 }
 
 // handleShelf 返回云端书架。
@@ -138,12 +202,17 @@ func (s *server) handleShelf(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
 	defer cancel()
 
-	books, err := s.account.VShelf(ctx)
+	acct := s.accountFor(ctx, r)
+	if acct == nil {
+		s.accountUnavailable(w)
+		return
+	}
+	books, err := acct.VShelf(ctx)
 	if err != nil {
 		writeJSON(w, http.StatusBadGateway, map[string]any{
 			"error":    "获取书架失败",
 			"detail":   err.Error(),
-			"loggedIn": s.account.LoggedIn(),
+			"loggedIn": acct.LoggedIn(),
 		})
 		return
 	}
@@ -158,8 +227,12 @@ func (s *server) handleShelfBook(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "仅支持 GET 和 POST"})
 		return
 	}
-	if !s.account.LoggedIn() {
-		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "请先登录"})
+	ctx, cancel := context.WithTimeout(r.Context(), 20*time.Second)
+	defer cancel()
+
+	acct := s.accountFor(ctx, r)
+	if acct == nil {
+		s.accountUnavailable(w)
 		return
 	}
 	bookID := r.URL.Query().Get("bookId")
@@ -182,17 +255,15 @@ func (s *server) handleShelfBook(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "书籍 ID 无效"})
 		return
 	}
-	ctx, cancel := context.WithTimeout(r.Context(), 20*time.Second)
-	defer cancel()
 	if r.Method == http.MethodPost {
-		if err := s.account.AddShelfBook(ctx, bookID); err != nil {
+		if err := acct.AddShelfBook(ctx, bookID); err != nil {
 			writeJSON(w, http.StatusBadGateway, map[string]string{"error": "加入书架失败，请重试"})
 			return
 		}
 		writeJSON(w, http.StatusOK, map[string]bool{"added": true})
 		return
 	}
-	added, err := s.account.HasShelfBook(ctx, bookID)
+	added, err := acct.HasShelfBook(ctx, bookID)
 	if err != nil {
 		writeJSON(w, http.StatusBadGateway, map[string]string{"error": "无法查看书架状态"})
 		return
@@ -203,13 +274,15 @@ func (s *server) handleShelfBook(w http.ResponseWriter, r *http.Request) {
 // handleHistory 返回云端阅读历史。
 func (s *server) handleHistory(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
-	if !s.account.LoggedIn() {
-		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "请先登录"})
-		return
-	}
 	ctx, cancel := context.WithTimeout(r.Context(), 25*time.Second)
 	defer cancel()
-	books, err := s.account.ReadHistory(ctx)
+
+	acct := s.accountFor(ctx, r)
+	if acct == nil {
+		s.accountUnavailable(w)
+		return
+	}
+	books, err := acct.ReadHistory(ctx)
 	if err != nil {
 		writeJSON(w, http.StatusBadGateway, map[string]string{"error": "获取阅读历史失败"})
 		return
@@ -233,6 +306,20 @@ func (s *server) handleProgress(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 25*time.Second)
 	defer cancel()
 
+	acct := s.accountFor(ctx, r)
+	if acct == nil {
+		if r.Method == http.MethodPost {
+			// 未登录时进度上报失败不打扰阅读，返回 401 由前端忽略
+			s.accountUnavailable(w)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{
+			"count": 0, "progress": []fqapi.Progress{}, "loggedIn": false,
+			"mode": s.fanqie.Mode(),
+		})
+		return
+	}
+
 	if r.Method == http.MethodPost {
 		var req struct {
 			BookID string `json:"bookId"`
@@ -243,7 +330,7 @@ func (s *server) handleProgress(w http.ResponseWriter, r *http.Request) {
 			writeErr(w, http.StatusBadRequest, "请求体不是合法 JSON", err)
 			return
 		}
-		if err := s.account.UpdateProgress(ctx, req.BookID, req.ItemID, req.Order); err != nil {
+		if err := acct.UpdateProgress(ctx, req.BookID, req.ItemID, req.Order); err != nil {
 			writeJSON(w, http.StatusBadGateway, map[string]any{
 				"error":  "进度上报失败",
 				"detail": err.Error(),
@@ -254,12 +341,12 @@ func (s *server) handleProgress(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	list, err := s.account.ReadProgress(ctx)
+	list, err := acct.ReadProgress(ctx)
 	if err != nil {
 		writeJSON(w, http.StatusBadGateway, map[string]any{
 			"error":    "读取进度失败",
 			"detail":   err.Error(),
-			"loggedIn": s.account.LoggedIn(),
+			"loggedIn": acct.LoggedIn(),
 		})
 		return
 	}

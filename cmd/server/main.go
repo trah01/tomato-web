@@ -13,11 +13,13 @@ import (
 	"os/signal"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
 	"github.com/local/fanqieweb/internal/font"
 	"github.com/local/fanqieweb/internal/fqapi"
+	"github.com/local/fanqieweb/internal/sitesettings"
 )
 
 //go:embed all:static
@@ -26,24 +28,32 @@ var staticFS embed.FS
 type server struct {
 	api      *fqapi.Client
 	web      *fqapi.WebSession
-	account  *fqapi.Account
+	fanqie   *fanqieAccounts
 	source   *fqapi.ChapterSource
 	prefetch *fqapi.PrefetchCache
 	dec      *font.Decoder
 	bookID   string
 	logger   *log.Logger
+
+	// 站点设置（访问密码、两步验证、番茄账号绑定方式）
+	settings      *sitesettings.Settings
+	loginGuard    *loginGuard
+	pendingMu     sync.Mutex
+	pendingSecret string
+	pendingAt     time.Time
 }
 
 func main() {
 	var (
-		addr        = flag.String("addr", envOr("FQ_ADDR", ":8080"), "监听地址")
-		bookID      = flag.String("book", "", "默认书籍 ID")
-		fontPath    = flag.String("font-map", envOr("FQ_FONT_MAP", ""), "字体映射表 JSON 路径")
-		timeout     = flag.Int("timeout", 20, "上游超时（秒）")
-		accountFile = flag.String("account-file", envOr("FQ_ACCOUNT_FILE", "data/account.json"), "番茄账号会话存储路径（含登录凭据）")
-		pfWindow    = flag.Int("prefetch-window", envOrInt("FQ_PREFETCH_WINDOW", 3), "预取前后章数")
-		pfWorkers   = flag.Int("prefetch-workers", envOrInt("FQ_PREFETCH_WORKERS", 1), "预取并发数")
-		pfDelayMs   = flag.Int("prefetch-delay-ms", envOrInt("FQ_PREFETCH_DELAY_MS", 1500), "预取每章间隔毫秒")
+		addr         = flag.String("addr", envOr("FQ_ADDR", ":8080"), "监听地址")
+		bookID       = flag.String("book", "", "默认书籍 ID")
+		fontPath     = flag.String("font-map", envOr("FQ_FONT_MAP", ""), "字体映射表 JSON 路径")
+		timeout      = flag.Int("timeout", 20, "上游超时（秒）")
+		accountFile  = flag.String("account-file", envOr("FQ_ACCOUNT_FILE", "data/account.json"), "番茄账号会话存储路径（含登录凭据）")
+		settingsFile = flag.String("settings-file", envOr("FQ_SETTINGS_FILE", "data/settings.json"), "站点设置存储路径（含密码摘要与密钥）")
+		pfWindow     = flag.Int("prefetch-window", envOrInt("FQ_PREFETCH_WINDOW", 3), "预取前后章数")
+		pfWorkers    = flag.Int("prefetch-workers", envOrInt("FQ_PREFETCH_WORKERS", 1), "预取并发数")
+		pfDelayMs    = flag.Int("prefetch-delay-ms", envOrInt("FQ_PREFETCH_DELAY_MS", 1500), "预取每章间隔毫秒")
 	)
 	flag.Parse()
 
@@ -77,20 +87,32 @@ func main() {
 	logger.Printf("预取缓存已启用：前后 %d 章，%d 并发，%dms 间隔", *pfWindow, *pfWorkers, *pfDelayMs)
 
 	srv := &server{
-		api:      api,
-		source:   fqapi.NewChapterSource(api, dec),
-		prefetch: pf,
-		web:      fqapi.NewWebSession(time.Duration(*timeout) * time.Second),
-		account:  fqapi.NewAccount(*accountFile),
-		dec:      dec,
-		bookID:   firstNonEmpty(*bookID, os.Getenv("FQ_BOOK_ID")),
-		logger:   logger,
+		api:        api,
+		source:     fqapi.NewChapterSource(api, dec),
+		prefetch:   pf,
+		web:        fqapi.NewWebSession(time.Duration(*timeout) * time.Second),
+		dec:        dec,
+		bookID:     firstNonEmpty(*bookID, os.Getenv("FQ_BOOK_ID")),
+		logger:     logger,
+		loginGuard: newLoginGuard(),
 	}
 
-	// 恢复上次登录的番茄账号（Cookie 失效时会自动忽略）
-	if srv.account != nil {
+	// 站点设置：访问密码、两步验证、番茄账号绑定方式
+	settings := sitesettings.New(*settingsFile)
+	if err := settings.Load(); err != nil {
+		logger.Fatalf("站点设置加载失败: %v", err)
+	}
+	srv.settings = settings
+	view := settings.View()
+	logger.Printf("站点设置: 访问密码 %s，两步验证 %s，番茄账号绑定 %s",
+		enabledText(view.Access.Enabled), enabledText(view.TwoFA.Enabled), view.Fanqie.Mode)
+
+	srv.fanqie = newFanqieAccounts(fqapi.NewAccount(*accountFile), settings, logger)
+
+	// 恢复上次登录的番茄账号（Cookie 失效时会自动忽略）；仅服务端保存模式需要
+	if srv.fanqie.Server() != nil {
 		loadCtx, loadCancel := context.WithTimeout(context.Background(), 15*time.Second)
-		if u := srv.account.Load(loadCtx); u != nil {
+		if u := srv.fanqie.Server().Load(loadCtx); u != nil {
 			logger.Printf("已恢复番茄账号: %s", u.Name)
 		}
 		loadCancel()
@@ -107,7 +129,7 @@ func main() {
 
 	httpSrv := &http.Server{
 		Addr:              *addr,
-		Handler:           withCORS(logReq(mux, logger)),
+		Handler:           withCORS(logReq(srv.requireAccess(mux), logger)),
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 
@@ -136,6 +158,19 @@ func (s *server) routes(mux *http.ServeMux) {
 	// 首页
 	mux.HandleFunc("/home", s.handleHomePage)
 	mux.HandleFunc("/reader", s.handleReaderPage)
+	mux.HandleFunc("/login", s.handleLoginPage)
+	mux.HandleFunc("/usage", s.handleUsagePage)
+
+	// 站点访问密码 / 两步验证 / 站点设置
+	mux.HandleFunc("/api/auth/status", s.handleAuthStatus)
+	mux.HandleFunc("/api/auth/login", s.handleAuthLogin)
+	mux.HandleFunc("/api/auth/logout", s.handleAuthLogout)
+	mux.HandleFunc("/api/settings", s.handleSettings)
+	mux.HandleFunc("/api/settings/access", s.handleSettingsAccess)
+	mux.HandleFunc("/api/settings/2fa/start", s.handleSettings2FAStart)
+	mux.HandleFunc("/api/settings/2fa/enable", s.handleSettings2FAEnable)
+	mux.HandleFunc("/api/settings/2fa/disable", s.handleSettings2FADisable)
+	mux.HandleFunc("/api/settings/fanqie", s.handleSettingsFanqie)
 
 	// 静态资源（阅读器页面等）
 	fileServer := http.FileServer(http.FS(sub))
@@ -417,6 +452,14 @@ func firstNonEmpty(vals ...string) string {
 		}
 	}
 	return ""
+}
+
+// enabledText 把开关转成日志里的中文。
+func enabledText(v bool) string {
+	if v {
+		return "已开启"
+	}
+	return "未开启"
 }
 
 // withCORS 处理跨域预检。

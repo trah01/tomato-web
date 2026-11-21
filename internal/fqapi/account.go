@@ -124,6 +124,26 @@ func (a *Account) Load(ctx context.Context) *UserInfo {
 	return u
 }
 
+// AttachCookie 用外部提供的 Cookie 恢复会话，供「仅当前浏览器保存」模式使用。
+//
+// 与 Load 的区别：不读磁盘、不写磁盘，Cookie 由调用方（浏览器 localStorage）提供。
+// 校验失败时返回 nil，会话保持未登录状态。
+func (a *Account) AttachCookie(ctx context.Context, raw string) *UserInfo {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil
+	}
+	a.setCookieHeader(raw)
+	u, err := a.fetchUserInfo(ctx)
+	if err != nil || u == nil {
+		return nil
+	}
+	a.mu.Lock()
+	a.user = u
+	a.mu.Unlock()
+	return u
+}
+
 // Save 把当前会话写入磁盘。
 func (a *Account) Save() error {
 	if a.storePath == "" {
