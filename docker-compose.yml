@@ -1,0 +1,33 @@
+services:
+  # Go 阅读器：对宿主机暴露 8080，反向代理只指向这一个端口
+  fanqieweb:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: fanqieweb:local
+    container_name: fanqieweb
+    restart: unless-stopped
+    networks:
+      - fanqie
+    ports:
+      - "8080:8080"
+    environment:
+      TZ: Asia/Shanghai
+      FQ_ACCOUNT_FILE: /app/session/account.json
+    volumes:
+      # 字体映射表可热更新，挂载后可改宿主机的 data/font_map.json
+      - ./data:/app/data:ro
+      - account-session:/app/session
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8080/api/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+networks:
+  fanqie:
+    driver: bridge
+
+volumes:
+  account-session:

@@ -1,0 +1,17 @@
+# Git 与本地环境
+.git
+.gitignore
+.DS_Store
+
+# 运行时产物（会挂载或重建，不进镜像）
+.run
+*.log
+tmp
+
+tools
+
+# Maven 构建产物（镜像内重新构建）
+target
+
+# 本地杂物与文档
+*.txt

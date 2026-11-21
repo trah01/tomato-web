@@ -1,0 +1,682 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>番茄阅读器 · 首页</title>
+<style>
+  :root{
+    --bg:#f6f3ec; --fg:#2b2622; --muted:#8a8078; --line:#e2dbd0;
+    --accent:#e8562a; --card:#fffdf8; --soft:rgba(232,86,42,.08);
+  }
+  [data-theme="dark"]{
+    --bg:#16181c; --fg:#d8d4cd; --muted:#7d7873; --line:#2a2e34;
+    --accent:#ff7a4d; --card:#1c1f24; --soft:rgba(255,122,77,.12);
+  }
+  *{box-sizing:border-box}
+  body{
+    margin:0; background:var(--bg); color:var(--fg);
+    font-family:"PingFang SC","Hiragino Sans GB","Microsoft YaHei",system-ui,sans-serif;
+  }
+  a{color:inherit; text-decoration:none}
+  button{
+    padding:7px 14px; border:1px solid var(--line); border-radius:8px;
+    background:var(--bg); color:var(--fg); font-size:13px; cursor:pointer;
+    transition:.15s;
+  }
+  button:hover{border-color:var(--accent); color:var(--accent)}
+  button.on{background:var(--accent); color:#fff; border-color:var(--accent)}
+
+  .wrap{max-width:1180px; margin:0 auto; padding:0 24px 80px}
+
+  /* 顶栏 */
+  header{
+    position:sticky; top:0; z-index:20; background:var(--bg);
+    border-bottom:1px solid var(--line);
+  }
+  .hbar{
+    max-width:1180px; margin:0 auto; padding:12px 24px;
+    display:flex; align-items:center; gap:14px;
+  }
+  .logo{font-size:17px; font-weight:700; white-space:nowrap}
+  .logo span{color:var(--accent)}
+  .search{position:relative; display:flex; gap:7px; flex:1; min-width:0; max-width:440px}
+  .search input{
+    flex:1; min-width:0; padding:8px 13px; border:1px solid var(--line); border-radius:8px;
+    background:var(--card); color:var(--fg); font-size:14px; outline:none;
+  }
+  .search input:focus{border-color:var(--accent)}
+  .search button{background:var(--accent); color:#fff; border-color:var(--accent)}
+  .search button:hover{opacity:.88; color:#fff}
+  .grow{flex:1}
+  .account-actions{display:flex; align-items:center; gap:6px; flex:0 0 auto}
+  .account-actions button{white-space:nowrap; padding-inline:8px}
+  #home-account{max-width:9em; overflow:hidden; text-overflow:ellipsis}
+  #btn-theme{
+    display:grid; place-items:center; flex:0 0 auto;
+    width:34px; height:34px; padding:0;
+  }
+  #btn-theme .theme-sun,[data-theme="dark"] #btn-theme .theme-moon{display:none}
+  [data-theme="dark"] #btn-theme .theme-sun{display:block}
+  .account-dialog{
+    width:min(460px,calc(100% - 28px)); max-height:82dvh;
+    padding:0; border:1px solid var(--line); border-radius:12px;
+    background:#fff; color:var(--fg); box-shadow:0 18px 48px rgba(0,0,0,.15);
+  }
+  [data-theme="dark"] .account-dialog{background:var(--card)}
+  .account-dialog::backdrop{background:rgba(0,0,0,.36)}
+  .account-head{
+    display:flex; align-items:center; justify-content:space-between; gap:12px;
+    position:sticky; top:0; padding:12px 16px; background:inherit; border-bottom:1px solid var(--line);
+  }
+  .account-head h2{margin:0; font-size:16px}
+  .account-body{padding:12px 16px 16px; font-size:14px}
+  .account-body p{margin:0 0 12px}
+  .account-status{color:var(--fg)}
+  .account-list{list-style:none; margin:0; padding:0}
+  .account-list li+li{border-top:1px solid var(--line)}
+  .account-book{display:flex; align-items:center; gap:12px; padding:8px; border-radius:6px}
+  .account-book:hover,.account-book:focus-visible{background:var(--soft)}
+  .account-cover{width:40px; height:54px; flex:none; object-fit:cover; border-radius:4px; background:var(--line)}
+  .account-book strong,.account-note{display:block; overflow-wrap:anywhere}
+  .account-note{margin-top:4px; color:var(--muted); font-size:12px}
+  .account-qr{display:block; width:180px; height:180px; margin:12px auto; object-fit:contain; background:#fff}
+  .account-cookie{margin-top:16px}
+  .account-cookie summary{cursor:pointer}
+  .account-cookie form{display:flex; flex-wrap:wrap; gap:8px; margin-top:10px}
+  .account-cookie input{flex:1; min-width:0; border:1px solid var(--line); border-radius:6px; background:var(--bg); color:var(--fg); padding:6px}
+
+  /* 区块 */
+  section{margin-top:34px}
+  .sec-head{
+    display:flex; align-items:baseline; gap:12px; margin-bottom:16px;
+  }
+  .sec-head h2{font-size:19px; margin:0; font-weight:600}
+  .sec-head .sub{font-size:12px; color:var(--muted)}
+  .sec-head .more{margin-left:auto; font-size:13px; color:var(--muted)}
+  .sec-head .more:hover{color:var(--accent)}
+
+  /* 番茄巅峰榜 */
+  .peak{
+    background:#fff; border:1px solid var(--line); border-radius:12px;
+    padding:22px 18px 12px;
+  }
+  [data-theme="dark"] .peak{background:var(--card)}
+  .peak-head{margin:0 6px 18px}
+  .peak-head h2{margin:0; font-size:22px}
+  .peak-head p{margin:6px 0 0; color:var(--muted); font-size:13px}
+  .peak-status{padding:14px 6px; color:var(--muted); font-size:13px}
+  .peak-status button{margin-left:8px}
+  .peak-carousel:not([hidden]){
+    display:grid; grid-template-columns:36px minmax(0,1fr) 36px;
+    grid-template-areas:"prev books next" ". pages ."; gap:8px;
+    align-items:center;
+  }
+  .peak-books{
+    grid-area:books; display:grid; grid-auto-flow:column;
+    grid-template-columns:repeat(3,minmax(0,1fr)); grid-template-rows:repeat(3,auto);
+    gap:12px 24px;
+  }
+  .peak-book{
+    display:grid; grid-template-columns:2ch minmax(0,1fr) 66px; gap:10px;
+    align-items:start; padding:8px 5px; border-radius:8px; min-height:104px;
+  }
+  .peak-book:hover,.peak-book:focus-visible{background:var(--soft)}
+  .peak-pos{font-size:15px; color:var(--muted); font-variant-numeric:tabular-nums}
+  .peak-pos.podium{color:var(--accent); font-weight:700}
+  .peak-name{
+    font-size:16px; line-height:1.4; font-weight:600; overflow-wrap:anywhere;
+    display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden;
+  }
+  .peak-category{margin-top:5px; color:var(--muted); font-size:12px}
+  .peak-cover{width:66px; aspect-ratio:3 / 4; background:var(--line); border-radius:6px; overflow:hidden}
+  .peak-cover img{width:100%; height:100%; object-fit:cover; display:block}
+  .peak-arrow{
+    width:36px; height:36px; padding:0; border-radius:50%;
+    background:var(--card); font-size:24px; line-height:1;
+  }
+  .peak-arrow:disabled{opacity:.35; cursor:default; border-color:var(--line); color:var(--muted)}
+  #peak-prev{grid-area:prev}
+  #peak-next{grid-area:next}
+  .peak-pages{grid-area:pages; display:flex; flex-wrap:wrap; justify-content:center}
+  .peak-pages button{
+    min-width:22px; height:32px; padding:0 4px; border:none; background:transparent;
+  }
+  .peak-pages button::after{content:""; display:block; height:3px; border-radius:2px; background:var(--line)}
+  .peak-pages button[aria-current="page"]::after,.peak-pages button:hover::after{background:var(--accent)}
+  @media (max-width:950px){
+    .peak-books{grid-template-columns:repeat(2,minmax(0,1fr))}
+  }
+  @media (max-width:640px){
+    .peak{padding:16px 12px 10px}
+    .peak-carousel:not([hidden]){grid-template-areas:"books books books" "prev pages next"}
+    .peak-books{grid-template-columns:minmax(0,1fr); gap:4px}
+  }
+
+  /* 推荐卡片 */
+  .rec-grid{
+    display:grid; grid-template-columns:repeat(auto-fill,minmax(250px,1fr)); gap:14px;
+  }
+  .rec{
+    display:flex; gap:12px; padding:12px; border-radius:11px;
+    background:var(--card); border:1px solid var(--line);
+    cursor:pointer; transition:.18s;
+  }
+  .rec:hover{border-color:var(--accent); transform:translateY(-2px);
+    box-shadow:0 6px 20px rgba(0,0,0,.07)}
+  .rec img{
+    width:62px; height:84px; object-fit:cover; border-radius:6px;
+    background:var(--line); flex:0 0 auto;
+  }
+  .rec .info{min-width:0; display:flex; flex-direction:column; gap:4px}
+  .rec .name{font-size:14px; font-weight:600; line-height:1.35;
+    display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden}
+  .rec .auth{font-size:12px; color:var(--muted)}
+  .rec .abs{font-size:12px; color:var(--muted); line-height:1.5; margin-top:2px;
+    display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden}
+  .tag{
+    display:inline-block; font-size:11px; padding:1px 7px; border-radius:4px;
+    background:var(--soft); color:var(--accent); width:fit-content;
+  }
+
+  /* 榜单 */
+  .rank-tabs{display:flex; gap:7px; flex-wrap:wrap; margin-bottom:14px}
+  .rank-tabs button{padding:5px 12px; font-size:12px; border-radius:20px}
+
+  .rank-list{
+    display:grid; grid-template-columns:repeat(auto-fill,minmax(350px,1fr)); gap:0 26px;
+  }
+  .rank-item{
+    display:flex; gap:12px; padding:11px 4px; align-items:center;
+    border-bottom:1px solid var(--line); cursor:pointer;
+  }
+  .rank-item:hover .rk-name{color:var(--accent)}
+  .rk-no{
+    font-size:15px; font-weight:700; width:26px; text-align:center;
+    color:var(--muted); flex:0 0 auto; font-variant-numeric:tabular-nums;
+  }
+  .rank-item:nth-child(-n+3) .rk-no{color:var(--accent)}
+  .rk-body{min-width:0; flex:1}
+  .rk-name{font-size:14px; font-weight:600; white-space:nowrap;
+    overflow:hidden; text-overflow:ellipsis; transition:.15s}
+  .rk-meta{font-size:12px; color:var(--muted); margin-top:3px;
+    white-space:nowrap; overflow:hidden; text-overflow:ellipsis}
+  .rk-diff{font-size:11px; flex:0 0 auto; padding:1px 6px; border-radius:4px}
+  .rk-up{color:#27ae60; background:rgba(39,174,96,.1)}
+  .rk-down{color:#c0392b; background:rgba(192,57,43,.1)}
+  .rk-new{color:var(--accent); background:var(--soft)}
+
+  /* 最近更新表 */
+  .upd-table{width:100%; border-collapse:collapse; font-size:13px}
+  .upd-table th{
+    text-align:left; font-weight:500; color:var(--muted); font-size:12px;
+    padding:8px 10px; border-bottom:1px solid var(--line); white-space:nowrap;
+  }
+  .upd-table td{padding:10px; border-bottom:1px solid var(--line)}
+  .upd-table tr{cursor:pointer}
+  .upd-table tr:hover td{background:var(--soft)}
+  .upd-cat{font-size:11px; color:var(--muted)}
+  .upd-ch{color:var(--muted); font-size:12px}
+
+  .loading{text-align:center; padding:60px; color:var(--muted); font-size:14px}
+  .err{color:#c0392b}
+  .skeleton{
+    height:108px; border-radius:11px; background:var(--line); opacity:.45;
+    animation:pulse 1.4s ease-in-out infinite;
+  }
+  @keyframes pulse{0%,100%{opacity:.35}50%{opacity:.65}}
+
+  @media (max-width:700px){
+    .wrap{padding:0 14px 60px}
+    .hbar{padding:10px 14px; flex-wrap:wrap}
+    .search{max-width:none; order:3; flex-basis:100%}
+    .rank-list{grid-template-columns:1fr}
+    .upd-table .hide-sm{display:none}
+  }
+  @media (max-width:450px){
+    .hbar{gap:7px}
+    .hbar .grow{display:none}
+    .account-actions{margin-left:auto}
+    .account-actions button{padding-inline:6px}
+    #home-account{max-width:5em}
+  }
+  @media (max-width:360px){
+    .logo span{display:none}
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="hbar">
+    <div class="logo">🍅 番茄<span>阅读器</span></div>
+    <form class="search" role="search">
+      <input id="q" type="search" aria-label="书名或作者" placeholder="搜索书名或作者" required>
+      <button type="submit">搜索</button>
+      <div class="search-panel" id="search-panel" aria-live="polite" hidden></div>
+    </form>
+    <div class="grow"></div>
+    <nav class="account-actions" aria-label="番茄账号">
+      <button id="home-shelf" type="button" hidden>书架</button>
+      <button id="home-history" type="button" hidden>历史记录</button>
+      <button id="home-account" type="button">登录</button>
+    </nav>
+    <button id="btn-theme" type="button" title="切换到深色模式" aria-label="切换到深色模式">
+      <svg class="theme-moon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <path d="M20.9 13.35A9 9 0 0 1 10.65 3.1 9 9 0 1 0 20.9 13.35Z"/>
+      </svg>
+      <svg class="theme-sun" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true">
+        <circle cx="12" cy="12" r="4"/>
+        <path d="M12 2v2m0 16v2M2 12h2m16 0h2M4.9 4.9l1.4 1.4m11.4 11.4 1.4 1.4m0-14.2-1.4 1.4M6.3 17.7l-1.4 1.4"/>
+      </svg>
+    </button>
+  </div>
+</header>
+
+<div class="wrap">
+  <section class="peak" aria-labelledby="peak-title">
+    <div class="peak-head">
+      <h2 id="peak-title">番茄巅峰榜</h2>
+      <p>根据作品好评、人气、互动等综合得分排行</p>
+    </div>
+    <div class="peak-status" id="peak-status" role="status">加载中…</div>
+    <div class="peak-carousel" id="peak-carousel" hidden>
+      <button class="peak-arrow" id="peak-prev" type="button" aria-label="巅峰榜上一页">‹</button>
+      <div class="peak-books" id="peak-books"></div>
+      <button class="peak-arrow" id="peak-next" type="button" aria-label="巅峰榜下一页">›</button>
+      <div class="peak-pages" id="peak-pages" aria-label="巅峰榜页码"></div>
+    </div>
+  </section>
+  <div id="boot" class="loading">加载中…</div>
+
+  <!-- 推荐 -->
+  <section id="sec-rec" hidden>
+    <div class="sec-head">
+      <h2>为你推荐</h2>
+      <span class="sub">根据热度与口碑精选</span>
+    </div>
+    <div class="rec-grid" id="rec-grid"></div>
+  </section>
+
+  <!-- 榜单 -->
+  <section id="sec-rank" hidden>
+    <div class="sec-head">
+      <h2>排行榜</h2>
+      <span class="sub" id="rank-sub"></span>
+      <a class="more" id="rank-more">查看更多 →</a>
+    </div>
+    <div class="rank-tabs" id="rank-tabs"></div>
+    <div class="rank-list" id="rank-list"></div>
+  </section>
+
+  <!-- 最近更新 -->
+  <section id="sec-upd" hidden>
+    <div class="sec-head">
+      <h2>最近更新</h2>
+      <span class="sub">全站最新发布章节</span>
+    </div>
+    <table class="upd-table">
+      <thead>
+        <tr>
+          <th class="hide-sm">类型</th>
+          <th>书名</th>
+          <th class="hide-sm">最新章节</th>
+          <th class="hide-sm">作者</th>
+          <th>更新时间</th>
+        </tr>
+      </thead>
+      <tbody id="upd-body"></tbody>
+    </table>
+  </section>
+</div>
+
+<dialog class="account-dialog" id="home-account-dialog" aria-labelledby="home-account-title">
+  <div class="account-head">
+    <h2 id="home-account-title"></h2>
+    <form method="dialog"><button aria-label="关闭账号面板">关闭</button></form>
+  </div>
+  <div class="account-body" id="home-account-body"></div>
+</dialog>
+
+<script>
+const $ = s => document.querySelector(s);
+const $$ = s => [...document.querySelectorAll(s)];
+
+function esc(s){return String(s??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));}
+function el(tag, attrs, kids){
+  const n=document.createElement(tag);
+  if(attrs) for(const k in attrs){
+    if(k==="class") n.className=attrs[k];
+    else if(k==="text") n.textContent=attrs[k];
+    else if(k.startsWith("on")) n.addEventListener(k.slice(2), attrs[k]);
+    else n.setAttribute(k, attrs[k]);
+  }
+  if(kids!=null){
+    if(Array.isArray(kids)) kids.forEach(c=>c&&n.appendChild(c));
+    else if(typeof kids==="string") n.textContent=kids;
+    else n.appendChild(kids);
+  }
+  return n;
+}
+async function api(p,options){
+  const r=await fetch(p,options);
+  const j=await r.json().catch(()=>({error:"响应异常"}));
+  if(!r.ok) throw new Error(j.detail||j.error||("HTTP "+r.status));
+  return j;
+}
+
+/* 主题 */
+(function(){
+  const button=$("#btn-theme");
+  const root=document.documentElement;
+  function applyTheme(theme){
+    root.dataset.theme=theme;
+    const label=theme==="dark"?"切换到浅色模式":"切换到深色模式";
+    button.title=label;
+    button.setAttribute("aria-label",label);
+  }
+  applyTheme(localStorage.getItem("fq-theme")||"light");
+  button.onclick=()=>{
+    const theme=root.dataset.theme==="dark"?"light":"dark";
+    applyTheme(theme);
+    localStorage.setItem("fq-theme",theme);
+  };
+})();
+
+/* 数字格式化 */
+function fmtNum(n){
+  n=Number(n)||0;
+  if(n>=100000000) return (n/100000000).toFixed(1)+"亿";
+  if(n>=10000) return (n/10000).toFixed(1)+"万";
+  return String(n);
+}
+function fmtTime(ts){
+  if(!ts) return "-";
+  const d=new Date(ts*1000), now=new Date();
+  const diff=(now-d)/1000;
+  if(diff<60) return "刚刚";
+  if(diff<3600) return Math.floor(diff/60)+"分钟前";
+  if(diff<86400) return Math.floor(diff/3600)+"小时前";
+  const p=n=>String(n).padStart(2,"0");
+  return `${p(d.getMonth()+1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
+}
+
+/* 去阅读页 */
+function openBook(id){ location.href="/reader?book="+encodeURIComponent(id); }
+
+/* ---- 搜索 ---- */
+const searchPanel=$("#search-panel");
+let searchRequest;
+$(".search").onsubmit=e=>{e.preventDefault(); doSearch();};
+$("#q").addEventListener("keydown",e=>{if(e.key==="Escape") searchPanel.hidden=true;});
+
+async function doSearch(){
+  const q=$("#q").value.trim();
+  if(!q) return;
+  searchRequest?.abort();
+  const request=new AbortController();
+  searchRequest=request;
+  searchPanel.hidden=false;
+  searchPanel.replaceChildren(el("div",{class:"search-message",text:"搜索中…"}));
+  const official=el("a",{
+    class:"search-official",text:"到番茄官网搜索",
+    href:"https://fanqienovel.com/search/"+encodeURIComponent(q),
+    target:"_blank",rel:"noopener"
+  });
+  try{
+    const j=await api("/api/search?q="+encodeURIComponent(q),{signal:request.signal});
+    if(request.signal.aborted) return;
+    searchPanel.replaceChildren();
+    if(j.scope==="home"){
+      searchPanel.appendChild(el("div",{class:"search-message",
+        text:j.results.length?"首页书目中的结果":"首页书目中没有找到结果"}));
+    }else if(!j.results.length){
+      searchPanel.appendChild(el("div",{class:"search-message",text:"没有找到结果"}));
+    }
+    for(const b of j.results){
+      const row=el("a",{class:"sitem",href:"/reader?book="+encodeURIComponent(b.bookId)});
+      if(b.thumb) row.appendChild(el("img",{src:b.thumb,alt:"",loading:"lazy"}));
+      const info=el("div",{class:"sinfo"});
+      info.appendChild(el("div",{class:"sname",text:b.title||""}));
+      info.appendChild(el("div",{class:"sauth",text:[b.author,b.category].filter(Boolean).join(" · ")}));
+      row.appendChild(info);
+      searchPanel.appendChild(row);
+    }
+    if(j.scope==="home") searchPanel.appendChild(official);
+  }catch(e){
+    if(request.signal.aborted) return;
+    searchPanel.replaceChildren(el("div",{class:"search-message err",text:"站内搜索暂时不可用"}),official);
+  }
+}
+document.addEventListener("click",e=>{
+  if(!e.target.closest(".search")) searchPanel.hidden=true;
+});
+
+/* ---- 巅峰榜 ---- */
+async function loadPeakRank(){
+  const status=$("#peak-status");
+  status.textContent="加载中…";
+  try{
+    const {books}=await api("/api/rank/peak");
+    if(!books.length){
+      status.textContent="暂无巅峰榜作品";
+      return;
+    }
+    renderPeakRank(books);
+    status.hidden=true;
+    $("#peak-carousel").hidden=false;
+  }catch(e){
+    status.replaceChildren(document.createTextNode("巅峰榜暂时无法加载"),
+      el("button",{type:"button",text:"重试",onclick:loadPeakRank}));
+  }
+}
+
+function renderPeakRank(books){
+  const host=$("#peak-books"), pages=$("#peak-pages");
+  const prev=$("#peak-prev"), next=$("#peak-next");
+  const compact=matchMedia("(max-width: 950px)"), narrow=matchMedia("(max-width: 640px)");
+  let page=0, perPage=9;
+
+  function showPage(index){
+    page=index;
+    const start=page*perPage;
+    host.replaceChildren(...books.slice(start,start+perPage).map((book,i)=>{
+      const position=start+i+1;
+      const cover=el("div",{class:"peak-cover"});
+      if(book.thumb) cover.appendChild(el("img",{src:book.thumb,alt:"",loading:"lazy"}));
+      return el("a",{class:"peak-book",href:"/reader?book="+encodeURIComponent(book.bookId),title:book.bookName},[
+        el("span",{class:position<=3?"peak-pos podium":"peak-pos",text:String(position).padStart(2,"0")}),
+        el("div",{},[
+          el("div",{class:"peak-name",text:book.bookName}),
+          el("div",{class:"peak-category",text:book.category})
+        ]),
+        cover
+      ]);
+    }));
+    prev.disabled=page===0;
+    next.disabled=start+perPage>=books.length;
+    Array.from(pages.children).forEach((button,i)=>{
+      if(i===page) button.setAttribute("aria-current","page");
+      else button.removeAttribute("aria-current");
+    });
+  }
+
+  function updateLayout(){
+    const start=page*perPage;
+    perPage=narrow.matches?3:compact.matches?6:9;
+    pages.replaceChildren(...Array.from({length:Math.ceil(books.length/perPage)},(_,i)=>
+      el("button",{type:"button","aria-label":"巅峰榜第 "+(i+1)+" 页",onclick:()=>showPage(i)})
+    ));
+    showPage(Math.floor(start/perPage));
+  }
+  prev.onclick=()=>showPage(page-1);
+  next.onclick=()=>showPage(page+1);
+  compact.addEventListener("change",updateLayout);
+  narrow.addEventListener("change",updateLayout);
+  updateLayout();
+}
+
+/* ---- 推荐 ---- */
+function renderRecs(list){
+  const grid=$("#rec-grid");
+  grid.textContent="";
+  list.forEach(b=>{
+    const card=el("div",{class:"rec",onclick:()=>openBook(b.bookId)});
+    if(b.thumb) card.appendChild(el("img",{src:b.thumb,loading:"lazy"}));
+    const info=el("div",{class:"info"});
+    info.appendChild(el("div",{class:"name",text:b.bookName||""}));
+    if(b.category) info.appendChild(el("span",{class:"tag",text:b.category}));
+    info.appendChild(el("div",{class:"auth",text:b.author||""}));
+    if(b.abstract) info.appendChild(el("div",{class:"abs",text:b.abstract}));
+    card.appendChild(info);
+    grid.appendChild(card);
+  });
+  $("#sec-rec").hidden=false;
+}
+
+/* ---- 榜单 ---- */
+let rankState={gender:1,categoryId:1141,mold:2,cats:{male:[],female:[]}};
+
+async function loadRankCats(){
+  try{
+    const j=await api("/api/rank/categories");
+    rankState.cats={male:j.male||[],female:j.female||[]};
+  }catch(e){}
+}
+
+function renderRankTabs(){
+  const host=$("#rank-tabs");
+  host.textContent="";
+  const cats = rankState.gender===1 ? rankState.cats.male : rankState.cats.female;
+  cats.forEach(c=>{
+    const b=el("button",{text:c.name,onclick:()=>{
+      rankState.categoryId=c.id;
+      renderRankTabs();
+      loadRankContent();
+    }});
+    if(c.id===rankState.categoryId) b.classList.add("on");
+    host.appendChild(b);
+  });
+}
+
+async function loadRankContent(){
+  const host=$("#rank-list");
+  host.textContent="";
+  for(let i=0;i<6;i++) host.appendChild(el("div",{class:"skeleton"}));
+  try{
+    const j=await api(`/api/rank?gender=${rankState.gender}&categoryId=${rankState.categoryId}&mold=${rankState.mold}&limit=12`);
+    host.textContent="";
+    $("#rank-sub").textContent=`${j.category} · ${j.moldName} · 共 ${j.total} 本`;
+    (j.books||[]).forEach(b=>{
+      const item=el("div",{class:"rank-item",onclick:()=>openBook(b.bookId)});
+      item.appendChild(el("div",{class:"rk-no",text:String(b.pos||0).padStart(2,"0")}));
+      const body=el("div",{class:"rk-body"});
+      body.appendChild(el("div",{class:"rk-name",text:b.bookName||""}));
+      const meta=[b.author, b.category, fmtNum(b.readCount)+"阅读", fmtNum(b.wordNumber)+"字"]
+        .filter(Boolean).join(" · ");
+      body.appendChild(el("div",{class:"rk-meta",text:meta}));
+      item.appendChild(body);
+      // 排名变化
+      const d=b.posDiff||0;
+      const diff=el("span",{class:"rk-diff"});
+      if(d>0){ diff.classList.add("rk-up"); diff.textContent="↑"+d; }
+      else if(d<0){ diff.classList.add("rk-down"); diff.textContent="↓"+Math.abs(d); }
+      else if(d===0){ diff.classList.add("rk-new"); diff.textContent="—"; }
+      item.appendChild(diff);
+      host.appendChild(item);
+    });
+    $("#sec-rank").hidden=false;
+  }catch(e){
+    host.textContent="";
+    host.appendChild(el("div",{class:"loading err",text:"榜单加载失败："+e.message}));
+  }
+}
+
+/* 男频/女频切换 */
+function renderGenderSwitch(){
+  // 放到「排行榜」区块自己的 sec-head 里（不能跨区块查询）
+  const section=$("#sec-rank");
+  if(!section) return;
+  const head=section.querySelector(".sec-head");
+  if(!head) return;
+  let sw=head.querySelector("#gender-sw");
+  if(!sw){
+    sw=el("div",{id:"gender-sw",style:"display:flex;gap:6px;margin-left:10px"});
+    head.insertBefore(sw, head.querySelector(".more"));
+  }
+  sw.textContent="";
+  [[1,"男频"],[2,"女频"]].forEach(([g,label])=>{
+    const b=el("button",{text:label,onclick:()=>{
+      rankState.gender=g;
+      const cats=g===1?rankState.cats.male:rankState.cats.female;
+      rankState.categoryId=cats.length?cats[0].id:1141;
+      renderGenderSwitch();
+      renderRankTabs();
+      loadRankContent();
+    }});
+    b.style.padding="4px 12px"; b.style.fontSize="12px"; b.style.borderRadius="20px";
+    if(rankState.gender===g) b.classList.add("on");
+    sw.appendChild(b);
+  });
+}
+
+/* ---- 最近更新 ---- */
+function renderUpdates(list){
+  const body=$("#upd-body");
+  body.textContent="";
+  list.forEach(u=>{
+    const tr=el("tr",{onclick:()=>{
+      location.href="/reader?book="+encodeURIComponent(u.bookId)+"&chapter="+encodeURIComponent(u.itemId);
+    }});
+    const tdCat=el("td",{class:"hide-sm"});
+    tdCat.appendChild(el("span",{class:"upd-cat",text:u.category||""}));
+    tr.appendChild(tdCat);
+    tr.appendChild(el("td",{text:u.bookName||""}));
+    tr.appendChild(el("td",{class:"hide-sm"},el("span",{class:"upd-ch",text:u.chapter||""})));
+    tr.appendChild(el("td",{class:"hide-sm",text:u.author||""}));
+    tr.appendChild(el("td",{class:"upd-cat",text:fmtTime(u.updateTime)}));
+    body.appendChild(tr);
+  });
+  $("#sec-upd").hidden=false;
+}
+
+/* ---- 启动 ---- */
+loadPeakRank();
+(async function boot(){
+  const bootEl=$("#boot");
+  try{
+    const [home] = await Promise.all([api("/api/home"), loadRankCats()]);
+    bootEl.remove();
+    renderRecs(home.recommends||[]);
+    renderGenderSwitch();
+    renderRankTabs();
+    await loadRankContent();
+    renderUpdates(home.recents||[]);
+  }catch(e){
+    bootEl.textContent="";
+    bootEl.appendChild(el("div",{class:"err",text:"加载失败："+e.message}));
+    bootEl.appendChild(el("div",{style:"margin-top:10px;font-size:12px",
+      text:"请确认服务端已启动，或稍后重试"}));
+  }
+})();
+</script>
+<script defer src="/home-account.js"></script>
+
+<style>
+  .search-panel{
+    position:absolute; inset:calc(100% + 6px) 0 auto;
+    background:var(--card);
+    border:1px solid var(--line); border-radius:10px;
+    box-shadow:0 12px 40px rgba(0,0,0,.16);
+    max-height:64vh; overflow-y:auto; padding:6px;
+  }
+  .search-message,.search-official{display:block; padding:10px 12px; font-size:13px}
+  .search-official{color:var(--accent); text-decoration:underline}
+  .sitem{padding:10px 12px; border-radius:7px; cursor:pointer; display:flex; gap:11px}
+  .sitem:hover,.sitem:focus-visible{background:var(--soft)}
+  .sitem img{width:40px; height:54px; object-fit:cover; border-radius:4px; background:var(--line)}
+  .sname{font-size:14px; font-weight:600; margin-bottom:3px}
+  .sauth{font-size:12px; color:var(--muted)}
+</style>
+</body>
+</html>

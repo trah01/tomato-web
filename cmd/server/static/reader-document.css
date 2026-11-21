@@ -1,0 +1,151 @@
+.topbar-line {
+  display: flex;
+  align-items: center;
+  gap: inherit;
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+}
+
+.document-theme-option { margin-top: 8px; }
+
+.document-chrome,
+.document-status-chrome,
+.document-controls { display: none; }
+
+.document-layout {
+  --topbar-height: max(88px, 8.475vw);
+  --document-status-height: max(14px, 1.3542vw);
+  --document-workspace: #eaeaea;
+  --window-header-bg: #e0e0e0;
+  --window-header-image: url("/reader-wps-header.png");
+  --window-footer-bg: #eaeaea;
+  --window-footer-image: url("/reader-wps-footer.png");
+  --document-paper: #fdfdfd;
+  --document-edge: #c3c3c3;
+  --document-ui-font: "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
+  --fg: #202124;
+  --muted: #525966;
+  --line: var(--document-edge);
+  --accent: #185bb8;
+  --card: var(--document-paper);
+  --panel: var(--document-paper);
+}
+
+.document-layout[data-theme="dark"] {
+  --document-workspace: #191a1d;
+  --document-paper: #25272b;
+  --document-edge: #41444b;
+  --fg: #e4e6ea;
+  --muted: #aab0ba;
+  --accent: #91b9f4;
+}
+
+:is(.document-layout, .editor-layout) #topbar {
+  display: block;
+  padding: 0;
+  border: 0;
+  background: var(--window-header-bg);
+  box-shadow: none;
+}
+
+:is(.document-layout, .editor-layout) .document-chrome,
+:is(.document-layout, .editor-layout) .document-status-chrome {
+  display: block;
+  background-repeat: no-repeat;
+  background-position: left center;
+  background-size: auto 100%;
+  pointer-events: none;
+}
+
+:is(.document-layout, .editor-layout) .document-chrome {
+  width: 100%;
+  height: 100%;
+  background-image: var(--window-header-image);
+}
+
+:is(.document-layout, .editor-layout) .document-status-chrome {
+  position: fixed;
+  inset: auto 0 0;
+  z-index: 40;
+  height: var(--document-status-height);
+  background-color: var(--window-footer-bg);
+  background-image: var(--window-footer-image);
+}
+
+:is(.document-layout, .editor-layout) .topbar-line,
+:is(.document-layout, .editor-layout) .railbar,
+:is(.document-layout, .editor-layout) #top-hotzone,
+:is(.document-layout, .editor-layout) .chapter-progress,
+:is(.document-layout, .editor-layout) .pf-badge { display: none; }
+
+.document-layout #scroll-area {
+  top: var(--topbar-height);
+  right: clamp(8px, 2.5vw, 48px);
+  bottom: var(--document-status-height);
+  padding: 0 0 32px;
+  border-right: 1px solid var(--document-edge);
+  background: var(--document-workspace);
+  color-scheme: light;
+}
+
+.document-layout body { background: var(--document-workspace); }
+
+.document-layout .reader {
+  position: relative;
+  width: calc(100% - 32px);
+  max-width: var(--document-width, min(1170px, 61vw));
+  min-height: calc(100% - 32px);
+  margin: clamp(12px, 1.5vw, 28px) auto 8px;
+  padding: clamp(30px, 7.4vw, 142px) clamp(18px, 9vw, 176px);
+  border: 1px solid var(--document-edge);
+  background: var(--document-paper);
+  box-shadow: 0 2px 9px #0001;
+}
+
+:is(.document-layout, .editor-layout) .settings {
+  top: auto;
+  right: 12px;
+  bottom: calc(var(--document-status-height) + 52px);
+  width: min(308px, calc(100vw - 24px));
+  max-height: calc(100dvh - var(--topbar-height) - var(--document-status-height) - 64px);
+  transform: none;
+}
+
+:is(.document-layout, .editor-layout):not(:fullscreen) .document-controls {
+  position: fixed;
+  right: 12px;
+  bottom: calc(var(--document-status-height) + 8px);
+  z-index: 42;
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 5px;
+  max-width: calc(100% - 24px);
+  padding: 5px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: var(--card);
+}
+
+.document-controls button {
+  min-height: 29px;
+  padding: 4px 7px;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--fg);
+  font: 12px var(--document-ui-font);
+  cursor: pointer;
+}
+
+.document-controls button:hover { border-color: var(--line); color: var(--accent); }
+#doc-exit { color: var(--accent); }
+
+@media (max-width: 600px) {
+  .document-layout .reader {
+    width: calc(100% - 16px);
+    max-width: none;
+    margin-top: 10px;
+  }
+}

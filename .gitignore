@@ -1,0 +1,26 @@
+# 运行时临时目录
+/tmp/
+
+# 运行时
+/.run/
+*.log
+.DS_Store
+
+# Python
+__pycache__/
+*.pyc
+
+# Rust（实验分支已移除）
+/signer-rs/target/
+
+# 编译产物
+/fanqieweb
+/server
+
+# 会话/工具文件（非项目资产）
+/AGENTS.md
+/dsh_purge*.txt
+
+# 运行时生成：本地账号会话（含登录凭据，绝不能提交）
+/data/account.json
+/data/settings.json
