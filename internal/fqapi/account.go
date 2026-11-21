@@ -557,16 +557,16 @@ func (a *Account) readProgressMap(ctx context.Context) (map[string]Progress, err
 		out[p.BookID] = Progress{
 			BookID:        p.BookID,
 			ItemID:        p.ItemID,
-			ReadTimestamp: p.ReadTimestamp,
+			ReadTimestamp: numToInt64(p.ReadTimestamp),
 		}
 	}
 	return out, nil
 }
 
 type ProgressRec struct {
-	BookID        string `json:"book_id"`
-	ItemID        string `json:"item_id"`
-	ReadTimestamp int64  `json:"read_timestamp"`
+	BookID        string      `json:"book_id"`
+	ItemID        string      `json:"item_id"`
+	ReadTimestamp json.Number `json:"read_timestamp"`
 }
 
 // ReadProgress 返回云端阅读进度列表。
@@ -747,12 +747,12 @@ func (a *Account) bookSimpleInfo(ctx context.Context, ids []string) map[string]s
 	var jr struct {
 		Data struct {
 			BookList []struct {
-				BookID        string `json:"book_id"`
-				BookName      string `json:"book_name"`
-				AuthorName    string `json:"author_name"`
-				ThumbURL      string `json:"thumb_url"`
-				SerialCount   int    `json:"serial_count"`
-				CreationState string `json:"creation_status"`
+				BookID        string      `json:"book_id"`
+				BookName      string      `json:"book_name"`
+				AuthorName    string      `json:"author_name"`
+				ThumbURL      string      `json:"thumb_url"`
+				SerialCount   json.Number `json:"serial_count"`
+				CreationState string      `json:"creation_status"`
 			} `json:"bookList"`
 		} `json:"data"`
 	}
@@ -764,7 +764,7 @@ func (a *Account) bookSimpleInfo(ctx context.Context, ids []string) map[string]s
 			Title:         b.BookName,
 			Author:        b.AuthorName,
 			Cover:         b.ThumbURL,
-			SerialCount:   b.SerialCount,
+			SerialCount:   int(numToInt64(b.SerialCount)),
 			CreationState: b.CreationState,
 		}
 	}
@@ -792,14 +792,14 @@ func (a *Account) fillChapterTitles(ctx context.Context, books []ShelfBook) {
 	var jr struct {
 		Data struct {
 			DetailList []struct {
-				BookID       string `json:"book_id"`
-				BookName     string `json:"book_name"`
-				AuthorName   string `json:"author_name"`
-				ThumbURL     string `json:"thumb_url"`
-				ItemShowName string `json:"item_show_title"`
-				ItemID       string `json:"item_id"`
-				SerialCount  int    `json:"serial_count"`
-				CreateState  string `json:"creation_status"`
+				BookID       string      `json:"book_id"`
+				BookName     string      `json:"book_name"`
+				AuthorName   string      `json:"author_name"`
+				ThumbURL     string      `json:"thumb_url"`
+				ItemShowName string      `json:"item_show_title"`
+				ItemID       string      `json:"item_id"`
+				SerialCount  json.Number `json:"serial_count"`
+				CreateState  string      `json:"creation_status"`
 			} `json:"detail_list"`
 		} `json:"data"`
 	}
@@ -828,8 +828,8 @@ func (a *Account) fillChapterTitles(ctx context.Context, books []ShelfBook) {
 		if d.ItemID != "" {
 			books[i].LastReadItem = d.ItemID
 		}
-		if d.SerialCount > 0 {
-			books[i].SerialCount = d.SerialCount
+		if n := int(numToInt64(d.SerialCount)); n > 0 {
+			books[i].SerialCount = n
 		}
 		if d.CreateState != "" {
 			books[i].CreationState = d.CreateState
