@@ -9,7 +9,11 @@
 # 环境变量：
 #   FQ_PORT          监听端口（默认 8080）
 #   FQ_FONT_MAP      字体映射表路径（默认 data/font_map.json）
-#   PREFETCH_WINDOW  预取前后章数（默认 3）
+#   PREFETCH_WINDOW  后台预取前后章数（默认 0，只取当前章）
+#   PREFETCH_BATCH   单次批量请求最多几章（默认 3）
+#   FQ_DEVICE_POOL   设备池保存路径（默认 data/device_pool.json）
+#   FQ_POOL_SIZE     设备池槽位数（默认 3）
+#   DEVICE_FILE      旧版单设备身份路径（仅用于迁移）
 #   PREFETCH_DELAY   预取每章间隔毫秒（默认 1500）
 
 set -uo pipefail
@@ -65,8 +69,12 @@ info "启动服务…"
 nohup "$ROOT/server" \
     -addr ":${GO_PORT}" \
     -font-map "${FQ_FONT_MAP:-data/font_map.json}" \
-    -prefetch-window "${PREFETCH_WINDOW:-3}" \
+    -prefetch-window "${PREFETCH_WINDOW:-0}" \
     -prefetch-delay-ms "${PREFETCH_DELAY:-1500}" \
+    -prefetch-batch "${PREFETCH_BATCH:-3}" \
+    -device-pool "${FQ_DEVICE_POOL:-data/device_pool.json}" \
+    -pool-size "${FQ_POOL_SIZE:-3}" \
+    -device-file "${DEVICE_FILE:-data/device.json}" \
     >> "$GO_LOG" 2>&1 &
 echo $! > "$GO_PID"
 

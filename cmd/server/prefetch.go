@@ -5,16 +5,15 @@ import (
 	"encoding/json"
 	"net/http"
 	"time"
-
-	"github.com/local/fanqieweb/internal/fqapi"
 )
 
-// handlePrefetch 预取指定章节附近的内容。
+// handlePrefetch 预取接下来要读的章节。
 //
 // POST /api/prefetch
 //
-//	{"bookId":"...","itemId":"..."}          # 预取该章前后 window 章
-//	{"bookId":"...","itemId":"...","block":true}  # 阻塞等待当前章就绪
+//	{"bookId":"...","itemIds":["a","b","c"]}     # 合并成一次批量请求（推荐）
+//	{"bookId":"...","itemId":"..."}              # 单章 + 前后 window 章
+//	{"bookId":"...","itemId":"...","block":true} # 阻塞等待该章就绪
 func (s *server) handlePrefetch(w http.ResponseWriter, r *http.Request) {
 	if s.prefetch == nil {
 		writeJSON(w, http.StatusServiceUnavailable, map[string]string{
@@ -28,9 +27,10 @@ func (s *server) handlePrefetch(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req struct {
-		BookID string `json:"bookId"`
-		ItemID string `json:"itemId"`
-		Block  bool   `json:"block"`
+		BookID  string   `json:"bookId"`
+		ItemID  string   `json:"itemId"`
+		ItemIDs []string `json:"itemIds"`
+		Block   bool     `json:"block"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeErr(w, http.StatusBadRequest, "请求体非法", err)
@@ -38,6 +38,20 @@ func (s *server) handlePrefetch(w http.ResponseWriter, r *http.Request) {
 	}
 	if req.BookID == "" {
 		req.BookID = s.bookID
+	}
+	if len(req.ItemIDs) > 0 {
+		// 前端已知道要读哪几章：直接按 id 批量入队，不用再拉一次目录。
+		if req.BookID == "" {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "需要 bookId"})
+			return
+		}
+		queued := s.prefetch.WarmItemIDs(req.BookID, req.ItemIDs)
+		writeJSON(w, http.StatusOK, map[string]any{
+			"ok":     true,
+			"queued": queued,
+			"status": s.prefetch.Status(),
+		})
+		return
 	}
 	if req.BookID == "" || req.ItemID == "" {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "需要 bookId 与 itemId"})
@@ -71,11 +85,11 @@ func (s *server) handlePrefetch(w http.ResponseWriter, r *http.Request) {
 	s.prefetch.PrefetchAround(req.BookID, book.Chapters, idx)
 
 	resp := map[string]any{
-		"ok":      true,
-		"index":   idx,
-		"window":  s.prefetch.Window(),
-		"status":  s.prefetch.Status(),
-		"itemId":  req.ItemID,
+		"ok":       true,
+		"index":    idx,
+		"window":   s.prefetch.Window(),
+		"status":   s.prefetch.Status(),
+		"itemId":   req.ItemID,
 		"bookName": book.Title,
 	}
 
@@ -105,13 +119,4 @@ func (s *server) handlePrefetchStatus(w http.ResponseWriter, r *http.Request) {
 		"enabled": true,
 		"status":  s.prefetch.Status(),
 	})
-}
-
-// prefetchNext 供前端在翻页时调用（内部使用）。
-func (s *server) prefetchAt(bookID string, chapters []fqapi.ChapterMeta, idx int) {
-	if s.prefetch == nil || idx < 0 || idx >= len(chapters) {
-		return
-	}
-	s.prefetch.Request(bookID, chapters[idx])
-	s.prefetch.PrefetchAround(bookID, chapters, idx)
 }

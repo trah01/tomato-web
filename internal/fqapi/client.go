@@ -74,8 +74,9 @@ type Client struct {
 	signer        Signer
 	mu            sync.RWMutex
 	device        *Device
-	key           string   // 内容解密密钥（hex）
-	cookie        string   // 网页会话 cookie
+	key           string // 内容解密密钥（hex）
+	cookie        string // 网页会话 cookie
+	pool          *DevicePool
 	homeResponses sync.Map // 公开首页数据，按上游 URL 缓存
 }
 
@@ -113,6 +114,25 @@ type registerResp struct {
 // Register 生成随机设备并完成注册，成功后缓存到 Client。
 func (c *Client) Register(ctx context.Context) (*Device, error) {
 	dev := randomDevice()
+	if err := c.registerDevice(ctx, dev); err != nil {
+		return nil, err
+	}
+
+	c.mu.Lock()
+	c.device = dev
+	// 内容密钥与设备绑定，换设备后旧密钥已失效，必须重新申请。
+	c.key = ""
+	c.mu.Unlock()
+	return dev, nil
+}
+
+// registerDevice 用给定的设备画像完成注册，只填充 dev 的 ID 字段，不改动 Client 状态。
+//
+// 设备池需要并发注册多台设备，因此注册与「当前设备」解耦。
+func (c *Client) registerDevice(ctx context.Context, dev *Device) error {
+	if dev == nil {
+		return errors.New("设备信息为空")
+	}
 	now := time.Now().UnixMilli()
 
 	body, err := json.Marshal(map[string]any{
@@ -121,7 +141,7 @@ func (c *Client) Register(ctx context.Context) (*Device, error) {
 		"_gen_time": now,
 	})
 	if err != nil {
-		return nil, err
+		return err
 	}
 
 	q := url.Values{}
@@ -151,35 +171,29 @@ func (c *Client) Register(ctx context.Context) (*Device, error) {
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, registerURL+"?"+q.Encode(), strings.NewReader(string(body)))
 	if err != nil {
-		return nil, err
+		return err
 	}
 	for k, v := range hdr {
 		req.Header.Set(k, v)
 	}
 	resp, err := c.http.Do(req)
 	if err != nil {
-		return nil, err
+		return err
 	}
 	defer resp.Body.Close()
 
 	raw, _ := io.ReadAll(resp.Body)
 	var rr registerResp
 	if err := json.Unmarshal(raw, &rr); err != nil {
-		return nil, &APIError{Status: resp.StatusCode, Body: string(raw), Msg: "设备注册响应不是合法 JSON"}
+		return &APIError{Status: resp.StatusCode, Body: string(raw), Msg: "设备注册响应不是合法 JSON"}
 	}
 	if rr.DeviceID.String() == "" {
-		return nil, &APIError{Status: resp.StatusCode, Body: string(raw), Msg: "设备注册未返回 device_id"}
+		return &APIError{Status: resp.StatusCode, Body: string(raw), Msg: "设备注册未返回 device_id"}
 	}
 
 	dev.DeviceID = rr.DeviceID.String()
 	dev.InstallID = rr.InstallID.String()
-
-	c.mu.Lock()
-	c.device = dev
-	// 内容密钥与设备绑定，换设备后旧密钥已失效，必须重新申请。
-	c.key = ""
-	c.mu.Unlock()
-	return dev, nil
+	return nil
 }
 
 // Device 返回当前设备（可能为 nil）。
@@ -218,12 +232,15 @@ func (c *Client) EnsureKey(ctx context.Context) error {
 	if ok {
 		return nil
 	}
+	if err := c.bootstrapPoolDevice(ctx); err != nil {
+		return err
+	}
 	if c.Device() == nil {
 		if _, err := c.Register(ctx); err != nil {
 			return err
 		}
 	}
-	k, err := c.registerKey(ctx)
+	k, err := c.registerKeyFor(ctx, c.Device())
 	if err != nil {
 		return err
 	}
@@ -231,9 +248,9 @@ func (c *Client) EnsureKey(ctx context.Context) error {
 	return nil
 }
 
-func (c *Client) registerKey(ctx context.Context) (string, error) {
-	dev := c.Device()
-	if dev == nil {
+// registerKeyFor 用指定设备申请内容密钥（不读取 Client 当前设备）。
+func (c *Client) registerKeyFor(ctx context.Context, dev *Device) (string, error) {
+	if dev == nil || dev.DeviceID == "" {
 		return "", errors.New("设备未注册")
 	}
 	secret, err := base64.StdEncoding.DecodeString(keySecretBase64)
@@ -356,7 +373,27 @@ func DecryptChapter(encB64, keyHex string) (string, error) {
 // ---- 业务接口 ----
 
 // BatchFull 批量拉取章节密文。
+//
+// 与纯算通道同样处理设备轮换：命中 403/风控空响应时换设备重试。
 func (c *Client) BatchFull(ctx context.Context, itemIDs []string, bookID string) (map[string]string, error) {
+	out := make(map[string]string)
+	err := c.withDeviceRotation(ctx, 3, func() error {
+		m, err := c.batchFullOnce(ctx, itemIDs, bookID)
+		if err == nil {
+			for id, v := range m {
+				out[id] = v
+			}
+		}
+		return err
+	})
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// batchFullOnce 是一次批量取章尝试。
+func (c *Client) batchFullOnce(ctx context.Context, itemIDs []string, bookID string) (map[string]string, error) {
 	dev := c.Device()
 	if dev == nil {
 		return nil, errors.New("设备未注册")

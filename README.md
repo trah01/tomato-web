@@ -14,9 +14,10 @@
 - **换主题**：浅色、护眼、绿色、蓝色、粉色随时切；还能切到 WPS 风格的「文档主题」或「VS Code 主题」，阅读页直接变成一份正在处理的文档或代码，摸鱼更安心
 - **全屏阅读**：一键全屏，屏幕上只剩正文，按 Esc 退出
 - **接着上次读**：自动记住读到哪一章，下次打开直接续上
-- **翻页快**：读到某一章时后台会提前准备好前后几章，翻页基本不用等
+- **翻页快**：接下来几章合并成一次请求提前取好，滚动模式自动接着往下排，点“下一章”基本不用等
 - **账号（可选）**：扫码登录自己的番茄账号，同步书架和阅读进度
 - **站点设置**：访问密码、两步验证、番茄账号存在哪里
+- **设备池**：同时维护几台匿名设备，取正文命中 403 或风控空响应时自动换一台重试
 
 ---
 
@@ -108,6 +109,28 @@ go run ./cmd/server -addr :8080
 
 ---
 
+## 设备池
+
+取正文本质上是拿一台匿名设备身份去换内容。单台设备被风控之后，所有 `/reading/*` 接口都会返回 HTTP 200 + 空响应体，没有错误码可判断，只能整台换掉。设备池就是为此准备的：
+
+- 默认 3 个槽位。首槽启动时注册，其余槽延迟 10 秒 / 30 秒错峰注册，避免「短时间批量注册」本身触发风控
+- 每个槽独立记连续失败，连续 2 次失败判为 dead，自动切到下一台健康设备并重新申请内容密钥
+- 刚换过设备又失败时不再继续换：这时问题多半在出口网络或上游整体故障，继续换只是白注册
+- dead 槽 24 小时内不补员；三个槽全 dead 时延迟 5 分钟整体重置，且 24 小时内最多自动重置一次
+
+设备池放在 `data/device_pool.json`（Docker 下是数据卷里的 `/app/session/device_pool.json`），只保存设备 ID 与健康状态，不保存内容密钥。旧版的 `data/device.json` 会在启动时自动迁移成第一个槽位，不需要重新注册。
+
+管理接口（排查用，平时不需要动）：
+
+| 接口 | 作用 |
+| --- | --- |
+| `GET /api/device/pool` | 查看每个槽的设备、健康状态、失败次数 |
+| `POST /api/device/pool/rotate` | 手动换设备；带 `{"index":N}` 可指定槽位 |
+| `POST /api/device/pool/refill` | 给 dead 槽补一台新设备，`{"index":N}` |
+| `POST /api/device/pool/reset` | 清空并重建整个池子 |
+
+---
+
 ## 配置（一般不用改）
 
 | 参数 | 环境变量 | 默认值 | 说明 |
@@ -116,16 +139,21 @@ go run ./cmd/server -addr :8080
 | `-font-map` | `FQ_FONT_MAP` | `data/font_map.json` | 字体映射表位置 |
 | `-account-file` | `FQ_ACCOUNT_FILE` | `data/account.json` | 番茄登录凭据保存位置 |
 | `-settings-file` | `FQ_SETTINGS_FILE` | `data/settings.json` | 站点设置保存位置 |
-| `-prefetch-window` | `FQ_PREFETCH_WINDOW` | `3` | 提前准备前后几章 |
-| `-prefetch-workers` | `FQ_PREFETCH_WORKERS` | `1` | 预取并发数 |
-| `-prefetch-delay-ms` | `FQ_PREFETCH_DELAY_MS` | `1500` | 每章之间等多久（毫秒），被限流时调大 |
+| `-prefetch-window` | `FQ_PREFETCH_WINDOW` | `0` | 后台预取前后几章，`0` 表示只取当前章 |
+| `-prefetch-batch` | `FQ_PREFETCH_BATCH` | `3` | 单次批量请求最多取几章，翻页预取按这个合并 |
+| `-prefetch-workers` | `FQ_PREFETCH_WORKERS` | `1` | 取章并发数 |
+| `-prefetch-delay-ms` | `FQ_PREFETCH_DELAY_MS` | `1500` | 两次取章之间的最小间隔（毫秒），被限流时调大 |
+| `-device-pool` | `FQ_DEVICE_POOL` | `data/device_pool.json` | 设备池保存位置；留空则退化为旧的单设备模式 |
+| `-pool-size` | `FQ_POOL_SIZE` | `3` | 设备池槽位数（最多 10） |
+| `-device-file` | `FQ_DEVICE_FILE` | `data/device.json` | 旧版单设备身份文件，仅在设备池为空时用于迁移 |
 
 ---
 
 ## 遇到问题
 
 **章节加载失败，提示被限流**
-翻得太快会触发风控，等几分钟再试。经常遇到的话，把 `FQ_PREFETCH_DELAY_MS` 调大，比如 `3000`。
+翻得太快会触发风控。页面会显示还要等多久，倒计时结束自动重试。
+经常遇到的话，把 `FQ_PREFETCH_DELAY_MS` 调大（比如 `3000`），或者把 `FQ_PREFETCH_BATCH` 调到 `2`。
 
 **正文里出现方块或者奇怪的符号**
 说明这本书用了新的混淆字体，当前的字体映射表没覆盖到。可以自己重新生成一份：

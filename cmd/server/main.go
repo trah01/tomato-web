@@ -29,14 +29,17 @@ type server struct {
 	api      *fqapi.Client
 	web      *fqapi.WebSession
 	fanqie   *fanqieAccounts
-	source   *fqapi.ChapterSource
 	prefetch *fqapi.PrefetchCache
 	dec      *font.Decoder
 	bookID   string
 	logger   *log.Logger
 
+	// 设备池：多台匿名设备轮换，403/风控时换设备重试
+	pool *fqapi.DevicePool
+
 	// 站点设置（访问密码、两步验证、番茄账号绑定方式）
 	settings      *sitesettings.Settings
+	deviceFile    string
 	loginGuard    *loginGuard
 	pendingMu     sync.Mutex
 	pendingSecret string
@@ -51,9 +54,13 @@ func main() {
 		timeout      = flag.Int("timeout", 20, "上游超时（秒）")
 		accountFile  = flag.String("account-file", envOr("FQ_ACCOUNT_FILE", "data/account.json"), "番茄账号会话存储路径（含登录凭据）")
 		settingsFile = flag.String("settings-file", envOr("FQ_SETTINGS_FILE", "data/settings.json"), "站点设置存储路径（含密码摘要与密钥）")
-		pfWindow     = flag.Int("prefetch-window", envOrInt("FQ_PREFETCH_WINDOW", 3), "预取前后章数")
+		pfWindow     = flag.Int("prefetch-window", envOrInt("FQ_PREFETCH_WINDOW", 0), "后台预取前后章数（0 表示只取当前章）")
 		pfWorkers    = flag.Int("prefetch-workers", envOrInt("FQ_PREFETCH_WORKERS", 1), "预取并发数")
-		pfDelayMs    = flag.Int("prefetch-delay-ms", envOrInt("FQ_PREFETCH_DELAY_MS", 1500), "预取每章间隔毫秒")
+		pfDelayMs    = flag.Int("prefetch-delay-ms", envOrInt("FQ_PREFETCH_DELAY_MS", 1500), "两次取章之间的最小间隔毫秒")
+		pfBatch      = flag.Int("prefetch-batch", envOrInt("FQ_PREFETCH_BATCH", 3), "单次批量请求最多取几章")
+		deviceFile   = flag.String("device-file", envOr("FQ_DEVICE_FILE", "data/device.json"), "旧版单设备身份路径（仅用于迁移到设备池）")
+		devicePool   = flag.String("device-pool", envOr("FQ_DEVICE_POOL", "data/device_pool.json"), "设备池保存路径（为空则退化为单设备模式）")
+		poolSize     = flag.Int("pool-size", envOrInt("FQ_POOL_SIZE", fqapi.DefaultPoolSize), "设备池槽位数")
 	)
 	flag.Parse()
 
@@ -61,6 +68,45 @@ func main() {
 
 	// 签名全部在本地纯算完成，不依赖任何外部签名服务。
 	api := fqapi.New(fqapi.Options{Timeout: *timeout, Signer: fqapi.NewPureSigner()})
+
+	// 设备池：复用已注册的设备身份，池子为空时注册第一台。
+	//
+	// 单设备时代只存 data/device.json，这里把它迁移成池子的第一个槽，
+	// 避免升级后重新注册、丢掉已有设备。
+	var pool *fqapi.DevicePool
+	if *devicePool != "" {
+		pool = fqapi.NewDevicePool(api, *devicePool, *poolSize)
+		pool.SetLogger(logger.Printf)
+		if err := pool.Load(); err != nil {
+			logger.Printf("设备池读取失败（将重新注册）: %v", err)
+		}
+		if err := pool.AdoptDeviceFile(*deviceFile); err != nil {
+			logger.Printf("旧设备身份迁移失败: %v", err)
+		}
+		api.UsePool(pool)
+
+		// 注册要联网，放到后台：注册慢或失败不该拖住服务启动。
+		// 首个取正文请求会通过 bootstrapPoolDevice 再补一次。
+		go func() {
+			initCtx, initCancel := context.WithTimeout(context.Background(), 90*time.Second)
+			defer initCancel()
+			if err := pool.Ensure(initCtx); err != nil {
+				logger.Printf("设备池初始化失败（首个请求会再试）: %v", err)
+				return
+			}
+			logger.Printf("设备池就绪：%s", pool.Summary())
+			// 其余槽位错峰注册（10s / 30s），避免批量注册本身触发风控。
+			pool.Fill(context.Background())
+		}()
+	} else if *deviceFile != "" {
+		// 未启用设备池：保留旧的单设备行为。
+		if st, err := fqapi.LoadDeviceFile(*deviceFile); err != nil {
+			logger.Printf("设备身份读取失败（将重新注册）: %v", err)
+		} else if st != nil {
+			api.LoadDevice(st)
+			logger.Printf("已复用设备身份: %s", st.DeviceID)
+		}
+	}
 
 	dec := font.New()
 	loaded, err := loadFontMap(dec, *fontPath)
@@ -81,20 +127,26 @@ func main() {
 		Window:     *pfWindow,
 		Workers:    *pfWorkers,
 		Delay:      time.Duration(*pfDelayMs) * time.Millisecond,
+		Batch:      *pfBatch,
 		MaxEntries: 300,
 		Logger:     logger.Printf,
 	})
-	logger.Printf("预取缓存已启用：前后 %d 章，%d 并发，%dms 间隔", *pfWindow, *pfWorkers, *pfDelayMs)
+	windowLabel := "只取当前章"
+	if *pfWindow > 0 {
+		windowLabel = "前后 " + strconv.Itoa(*pfWindow) + " 章"
+	}
+	logger.Printf("正文缓存已启用：%s，%d 并发，%dms 间隔，批量 %d 章/请求", windowLabel, *pfWorkers, *pfDelayMs, *pfBatch)
 
 	srv := &server{
 		api:        api,
-		source:     fqapi.NewChapterSource(api, dec),
 		prefetch:   pf,
 		web:        fqapi.NewWebSession(time.Duration(*timeout) * time.Second),
 		dec:        dec,
 		bookID:     firstNonEmpty(*bookID, os.Getenv("FQ_BOOK_ID")),
 		logger:     logger,
 		loginGuard: newLoginGuard(),
+		deviceFile: *deviceFile,
+		pool:       pool,
 	}
 
 	// 站点设置：访问密码、两步验证、番茄账号绑定方式
@@ -206,6 +258,10 @@ func (s *server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/book/", s.handleBook)
 	mux.HandleFunc("/api/chapter/", s.handleChapter)
 	mux.HandleFunc("/api/device", s.handleDevice)
+	mux.HandleFunc("/api/device/pool", s.handleDevicePool)
+	mux.HandleFunc("/api/device/pool/rotate", s.handleDevicePoolRotate)
+	mux.HandleFunc("/api/device/pool/refill", s.handleDevicePoolRefill)
+	mux.HandleFunc("/api/device/pool/reset", s.handleDevicePoolReset)
 	mux.HandleFunc("/api/font/reload", s.handleFontReload)
 	mux.HandleFunc("/api/prefetch", s.handlePrefetch)
 	mux.HandleFunc("/api/prefetch/status", s.handlePrefetchStatus)
@@ -219,7 +275,11 @@ func (s *server) handleHealth(w http.ResponseWriter, r *http.Request) {
 		"bookId":     s.bookID,
 		"deviceId":   "",
 		"installId":  "",
+		"pool":       nil,
 		"serverTime": time.Now().Format(time.RFC3339),
+	}
+	if s.pool != nil {
+		resp["pool"] = s.pool.Status()
 	}
 	if dev != nil {
 		resp["deviceId"] = dev.DeviceID
@@ -233,10 +293,16 @@ func (s *server) handleDevice(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
 	defer cancel()
 
-	if err := s.api.EnsureKey(ctx); err != nil {
+	if s.pool != nil {
+		if err := s.pool.Ensure(ctx); err != nil {
+			writeErr(w, http.StatusBadGateway, "设备池初始化失败", err)
+			return
+		}
+	} else if err := s.api.EnsureKey(ctx); err != nil {
 		writeErr(w, http.StatusBadGateway, "设备初始化失败", err)
 		return
 	}
+	s.saveDevice()
 	dev := s.api.Device()
 	writeJSON(w, http.StatusOK, map[string]any{
 		"ok":        true,
@@ -304,30 +370,28 @@ func (s *server) handleChapter(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 120*time.Second)
 	defer cancel()
 
-	// 首选：预取缓存（毫秒级命中）
-	if s.prefetch != nil {
-		if e, ok := s.prefetch.Get(itemID); ok {
-			writeJSON(w, http.StatusOK, map[string]any{
-				"itemId":  itemID,
-				"title":   e.Title,
-				"content": e.Content,
-				"length":  e.WordCount,
-				"source":  e.Source + "+cache",
-				"cached":  true,
-			})
-			return
-		}
+	entry, cached := s.prefetch.Request(bookID, fqapi.ChapterMeta{ItemID: itemID})
+	if !cached && s.prefetch.Paused() {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]any{
+			"error":       "章节加载失败",
+			"detail":      "连续取章触发了番茄风控，已暂停取章，请稍后再试",
+			"rateLimited": "1",
+			"status":      s.prefetch.Status(),
+		})
+		return
 	}
-
-	// 次选：依次尝试正文服务 → App 通道 → 网页通道（见 ChapterSource）
-	text, source, err := s.source.Fetch(ctx, bookID, itemID)
+	var err error
+	if !cached {
+		entry, err = s.prefetch.WaitFor(ctx, itemID, 120*time.Second)
+	}
 	if err != nil {
 		s.logger.Printf("取章失败 %s: %v", itemID, err)
 		if fqapi.IsRateLimited(err) {
-			writeJSON(w, http.StatusServiceUnavailable, map[string]string{
+			writeJSON(w, http.StatusServiceUnavailable, map[string]any{
 				"error":       "章节加载失败",
 				"detail":      "番茄签名服务被限流，请稍后重试（连续翻页或批量抓取会触发限制）",
 				"rateLimited": "1",
+				"status":      s.prefetch.Status(),
 			})
 			return
 		}
@@ -335,13 +399,44 @@ func (s *server) handleChapter(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	s.saveDevice()
+
+	source := entry.Source
+	if cached {
+		source += "+cache"
+	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"itemId":  itemID,
-		"content": text,
-		"length":  len([]rune(text)),
-		"hasPUA":  font.HasPUA(text),
+		"title":   entry.Title,
+		"content": entry.Content,
+		"length":  entry.WordCount,
+		"hasPUA":  font.HasPUA(entry.Content),
+		"cached":  cached,
 		"source":  source,
+		"status":  s.prefetch.Status(),
 	})
+}
+
+// saveDevice 把设备状态写盘，下次启动直接复用。
+//
+// 启用设备池时由池子自己持久化（含各槽健康状态）；否则退回旧版单设备文件。
+func (s *server) saveDevice() {
+	if s.pool != nil {
+		if err := s.pool.Save(); err != nil {
+			s.logger.Printf("设备池保存失败: %v", err)
+		}
+		return
+	}
+	if s.deviceFile == "" {
+		return
+	}
+	st := s.api.ExportDevice()
+	if st == nil {
+		return
+	}
+	if err := fqapi.SaveDeviceFile(s.deviceFile, st); err != nil {
+		s.logger.Printf("设备身份保存失败: %v", err)
+	}
 }
 
 func loadFontMap(dec *font.Decoder, preferred string) (string, error) {

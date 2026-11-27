@@ -1113,8 +1113,12 @@ function paraList(content) {
 
 async function fetchChapter(i) {
   const ch = state.chapters[i];
-  triggerPrefetch(ch.itemId);
-  return api(`/api/chapter/${encodeURIComponent(ch.itemId)}?bookId=${encodeURIComponent(state.bookId)}`);
+  const j = await api(`/api/chapter/${encodeURIComponent(ch.itemId)}?bookId=${encodeURIComponent(state.bookId)}`);
+  if (j.status) {
+    updatePfBadge(j.status);
+    if (j.status.inflight > 0) startPfPolling();
+  }
+  return j;
 }
 
 // 去掉正文开头重复的章标题（番茄正文首段会带 <h1> 标题，清洗后与章标题重复）
@@ -1170,33 +1174,54 @@ function showLoading(host, text) {
   host.appendChild(el("div", { class: "loading", text }));
 }
 
-function showError(host, text, retry, rateLimited) {
+// 冷却剩余秒数：服务端在错误响应里带 status.cooldownSeconds。
+function cooldownSeconds(e) {
+  const n = e && e.data && e.data.status && e.data.status.cooldownSeconds;
+  return typeof n === "number" && n > 0 ? n : 0;
+}
+
+function formatCooldown(sec) {
+  const m = Math.floor(sec / 60);
+  const s = sec % 60;
+  return m > 0 ? `${m} 分 ${s} 秒` : `${s} 秒`;
+}
+
+function showError(host, text, retry, rateLimited, err) {
   host.textContent = "";
-  const box = el("div", { class: "placeholder err" }, [el("div", { text })]);
+  const msg = el("div", { text });
+  const box = el("div", { class: "placeholder err" }, [msg]);
   if (retry) {
     const acts = el("div", { class: "acts" });
     const again = el("button", { text: "重试" });
     again.addEventListener("click", () => retry());
     acts.appendChild(again);
     box.appendChild(acts);
+
+    // 风控冷却时显示倒计时，归零后自动重试，不用手动点。
+    if (rateLimited) {
+      let left = cooldownSeconds(err);
+      if (left > 0) {
+        const tip = el("div", { class: "hint", text: `风控暂停中，还需 ${formatCooldown(left)}，到时会自动重试` });
+        box.appendChild(tip);
+        const timer = setInterval(() => {
+          left -= 1;
+          if (!tip.isConnected) { clearInterval(timer); return; }
+          if (left <= 0) {
+            clearInterval(timer);
+            tip.remove();
+            retry();
+            return;
+          }
+          tip.textContent = `风控暂停中，还需 ${formatCooldown(left)}，到时会自动重试`;
+        }, 1000);
+      }
+    }
   }
   host.appendChild(box);
 }
 
 function isRateLimited(e) {
-  return !!(e && e.data && e.data.rateLimited) || /限流/.test((e && e.message) || "");
-}
-
-// 限流时注册新设备并切换签名服务，然后重新加载当前章
-async function rotateDeviceRetry(retry) {
-  toast("正在更换签名设备…", 6000);
-  try {
-    const j = await api("/api/device/rotate", { method: "POST" });
-    toast("已换设备：" + (j.deviceId || ""), 2500);
-    retry();
-  } catch (e) {
-    toast("换设备失败：" + e.message, 4000);
-  }
+  return !!(e && e.data && e.data.rateLimited) || /限流|风控/.test((e && e.message) || "");
 }
 
 /* ---------- 章节加载 ---------- */
@@ -1232,10 +1257,15 @@ async function renderCurrentChapter() {
     scrollArea.scrollTop = 0;
     setBar(false);
     recordChapter(i);
-    if (prefs.mode === "scroll" && state.autoNext) loadNextIntoScroll(2);
+    if (prefs.mode === "scroll" && state.autoNext) {
+      loadNextIntoScroll(2);
+      warmChapters(state.renderedTo + 1, 2);
+    } else {
+      warmChapters(i + 1, 3);
+    }
   } catch (e) {
     if (version !== state.renderVersion) return;
-    showError(host, "加载失败：" + e.message, () => renderCurrentChapter(), isRateLimited(e));
+    showError(host, "加载失败：" + e.message, () => renderCurrentChapter(), isRateLimited(e), e);
   }
 }
 
@@ -1265,7 +1295,7 @@ async function appendNextChapter(version) {
       holder.remove();
       state.nextFailed = false;
       loadNextIntoScroll();
-    }, isRateLimited(e));
+    }, isRateLimited(e), e);
     return false;
   }
 }
@@ -1280,6 +1310,33 @@ async function loadNextIntoScroll(count = 1) {
     }
   } finally {
     if (version === state.renderVersion) state.loadingNext = false;
+  }
+}
+
+// 把接下来几章合并成一次批量请求提前取回，翻页时直接命中缓存。
+// 已经预取过的章节由服务端去重，重复调用不会产生额外请求。
+const warmInFlight = new Set();
+async function warmChapters(from, count = 3) {
+  if (!state.bookId) return;
+  const ids = [];
+  for (let i = from; i < state.chapters.length && ids.length < count; i++) {
+    if (i < 0) continue;
+    const id = state.chapters[i].itemId;
+    if (!id || warmInFlight.has(id)) continue;
+    ids.push(id);
+  }
+  if (!ids.length) return;
+  ids.forEach(id => warmInFlight.add(id));
+  try {
+    const j = await api("/api/prefetch", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ bookId: state.bookId, itemIds: ids })
+    });
+    if (j.status) updatePfBadge(j.status);
+  } catch (e) {
+  } finally {
+    ids.forEach(id => warmInFlight.delete(id));
   }
 }
 
@@ -1649,21 +1706,8 @@ $("#rail-top").onclick = () => {
   setBar(false);
 };
 
-/* ---------- 预取 ---------- */
+/* ---------- 缓存状态 ---------- */
 let pfTimer = null;
-
-async function triggerPrefetch(itemId) {
-  if (!state.bookId || !itemId) return;
-  try {
-    const j = await api("/api/prefetch", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ bookId: state.bookId, itemId })
-    });
-    updatePfBadge(j.status);
-    if (j.status && j.status.inflight > 0) startPfPolling();
-  } catch (e) {}
-}
 
 function updatePfBadge(st) {
   if (!st || !prefs.showPf) { $("#pf-badge").classList.add("hide"); return; }

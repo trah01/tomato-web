@@ -24,3 +24,6 @@ __pycache__/
 # 运行时生成：本地账号会话（含登录凭据，绝不能提交）
 /data/account.json
 /data/settings.json
+# 设备身份（含注册得到的 device_id / install_id，不要提交）
+/data/device.json
+/data/device_pool.json

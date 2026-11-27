@@ -66,9 +66,14 @@ func containsRateHint(s string) bool {
 }
 
 // blockedResponse 判断上游是否把请求直接丢弃（空响应或命中风控提示）。
+//
+// 403 单独算一篇：那是设备身份被拒，不单纯是限流。
 func blockedResponse(err error) bool {
 	if err == nil {
 		return false
+	}
+	if deviceRejected(err) {
+		return true
 	}
 	var ae *APIError
 	if errors.As(err, &ae) {
@@ -128,6 +133,52 @@ func (cs *ChapterSource) Fetch(ctx context.Context, bookID, itemID string) (stri
 	}
 
 	return "", "", fail
+}
+
+// FetchBatch 用批量端点一次取多章，返回「itemId → 已清洗正文」。
+//
+// 只走 batch_full（一次请求拿多章），失败由调用方回退到逐章 Fetch。
+// 这样连续看几章时上游请求数从 N 次降到 1 次，也更容易落在限流阈值内。
+func (cs *ChapterSource) FetchBatch(ctx context.Context, bookID string, itemIDs []string) (map[string]string, error) {
+	if cs.Local == nil {
+		return nil, &SourceError{Reasons: []string{"未配置数据源"}}
+	}
+	if len(itemIDs) == 0 {
+		return map[string]string{}, nil
+	}
+	if err := cs.Local.EnsureKeyPure(ctx); err != nil {
+		return nil, err
+	}
+	key := cs.Local.ContentKey()
+	if key == "" {
+		return nil, errors.New("缺少内容密钥")
+	}
+	if bookID == "" {
+		bookID = "0"
+	}
+	ciphers, err := cs.Local.BatchFull(ctx, itemIDs, bookID)
+	if err != nil {
+		return nil, err
+	}
+	out := make(map[string]string, len(ciphers))
+	for id, enc := range ciphers {
+		if enc == "" {
+			continue
+		}
+		plain, derr := DecryptChapter(enc, key)
+		if derr != nil {
+			continue
+		}
+		text := cs.decode(CleanContent(plain))
+		if strings.TrimSpace(text) == "" {
+			continue
+		}
+		out[id] = text
+	}
+	if len(out) == 0 {
+		return nil, &SourceError{Reasons: []string{"批量接口未返回可用正文"}}
+	}
+	return out, nil
 }
 
 func (cs *ChapterSource) decode(s string) string {

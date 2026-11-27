@@ -65,7 +65,25 @@ func pureBatchContentURL(deviceID, bookID, itemIDs string) string {
 }
 
 // FetchContentPure 取单章正文（纯算通道）。
+//
+// 命中 403 / 风控空响应时，如果挂了设备池，会换设备重试（见 withDeviceRotation）。
 func (c *Client) FetchContentPure(ctx context.Context, bookID, itemID string) (string, error) {
+	var plain string
+	err := c.withDeviceRotation(ctx, 3, func() error {
+		p, err := c.fetchContentPureOnce(ctx, bookID, itemID)
+		if err == nil {
+			plain = p
+		}
+		return err
+	})
+	if err != nil {
+		return "", err
+	}
+	return plain, nil
+}
+
+// fetchContentPureOnce 在单章与批量两个端点之间做一次尝试。
+func (c *Client) fetchContentPureOnce(ctx context.Context, bookID, itemID string) (string, error) {
 	if err := c.EnsureKeyPure(ctx); err != nil {
 		return "", err
 	}
@@ -190,6 +208,9 @@ func (c *Client) EnsureKeyPure(ctx context.Context) error {
 	if c.Device() != nil && c.ContentKey() != "" {
 		return nil
 	}
+	if err := c.bootstrapPoolDevice(ctx); err != nil {
+		return err
+	}
 	if c.Device() == nil {
 		if _, err := c.Register(ctx); err != nil {
 			return err
@@ -198,11 +219,7 @@ func (c *Client) EnsureKeyPure(ctx context.Context) error {
 	if c.ContentKey() != "" {
 		return nil
 	}
-	if k, err := c.registerKeyPure(ctx); err == nil && k != "" {
-		c.SetKey(k)
-		return nil
-	}
-	k, err := c.registerKey(ctx)
+	k, err := c.keyForDevice(ctx, c.Device())
 	if err != nil {
 		return err
 	}
@@ -210,10 +227,17 @@ func (c *Client) EnsureKeyPure(ctx context.Context) error {
 	return nil
 }
 
-// registerKeyPure 按 App 真实形态申请内容密钥。
-func (c *Client) registerKeyPure(ctx context.Context) (string, error) {
-	dev := c.Device()
-	if dev == nil {
+// keyForDevice 为指定设备申请内容密钥：先试 App 真实形态，失败再退回旧构造。
+func (c *Client) keyForDevice(ctx context.Context, dev *Device) (string, error) {
+	if k, err := c.registerKeyPureFor(ctx, dev); err == nil && k != "" {
+		return k, nil
+	}
+	return c.registerKeyFor(ctx, dev)
+}
+
+// registerKeyPureFor 用指定设备按 App 真实形态申请内容密钥。
+func (c *Client) registerKeyPureFor(ctx context.Context, dev *Device) (string, error) {
+	if dev == nil || dev.DeviceID == "" {
 		return "", errors.New("设备未注册")
 	}
 	content, err := registerKeyContentPure(dev.DeviceID)

@@ -24,6 +24,11 @@ services:
       FQ_ACCOUNT_FILE: /app/session/account.json
       # 站点设置：访问密码、两步验证、番茄账号绑定方式
       FQ_SETTINGS_FILE: /app/session/settings.json
+      # 设备池：复用已注册的多台设备身份，403/风控时自动换设备
+      FQ_DEVICE_POOL: /app/session/device_pool.json
+      FQ_POOL_SIZE: "3"
+      # 旧版单设备文件，仅在设备池为空时用于迁移
+      FQ_DEVICE_FILE: /app/session/device.json
     volumes:
       # 字体映射表：挂载后可以直接改宿主机的 data/font_map.json
       - ./data:/app/data:ro
